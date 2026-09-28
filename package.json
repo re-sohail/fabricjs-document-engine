@@ -1,6 +1,6 @@
 {
   "name": "fabricjs-document-engine",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Turn an existing Fabric.js canvas into a dependable editable document: stable object ids, versioned save and load, custom object registration and clear load errors.",
   "keywords": [
     "fabric",

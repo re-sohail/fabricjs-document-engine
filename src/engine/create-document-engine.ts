@@ -10,6 +10,8 @@ import { readObjectId, writeObjectId } from '../fabric/object-ids';
 import { createObjectRegistry } from '../fabric/object-registry';
 import type { CustomObjectDefinition } from '../fabric/object-registry';
 import { collectSerializedTypes, walkObjects } from '../fabric/walk-objects';
+import { createHistory } from '../history/create-history';
+import type { HistoryOptions, HistoryState } from '../history/create-history';
 import { DocumentEngineError, isDocumentEngineError } from './errors';
 import { createEventEmitter } from './event-emitter';
 import type { Unsubscribe } from './event-emitter';
@@ -24,6 +26,7 @@ export interface DocumentEngineOptions {
   storage?: DocumentStorage;
   customObjects?: CustomObjectDefinition[];
   document?: NewDocumentOptions;
+  history?: HistoryOptions;
 }
 
 export interface LoadOptions {
@@ -37,6 +40,8 @@ export interface DocumentEngineEvents {
   'save:start': { document: FabricDocument };
   'save:success': { document: FabricDocument };
   'save:error': { error: DocumentEngineError };
+  'history:change': HistoryState;
+  'history:error': { error: DocumentEngineError };
 }
 
 export interface DocumentEngine {
@@ -49,6 +54,14 @@ export interface DocumentEngine {
   load(documentId: string, options?: LoadOptions): Promise<FabricDocument>;
   save(): Promise<FabricDocument>;
   registerObject(definition: CustomObjectDefinition): void;
+  transaction<Result>(label: string, work: () => Result): Result;
+  commit(label?: string): boolean;
+  undo(): Promise<boolean>;
+  redo(): Promise<boolean>;
+  canUndo(): boolean;
+  canRedo(): boolean;
+  getHistory(): { undo: string[]; redo: string[] };
+  clearHistory(): void;
   getObjectById(id: string): FabricObject | undefined;
   on<Name extends keyof DocumentEngineEvents>(
     name: Name,
@@ -109,6 +122,16 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
   canvas.on('object:removed', handleObjectRemoved);
   rebuildIndex();
 
+  const history = createHistory({
+    canvas,
+    limit: options.history?.limit,
+    serializeObjects: () => {
+      rebuildIndex();
+      return serializeCanvas(canvas, registry.propertiesToInclude()).objects;
+    },
+    onChange: (state) => events.emit('history:change', state),
+  });
+
   function toDocument(): FabricDocument {
     ensureUsable();
     rebuildIndex();
@@ -167,10 +190,12 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
 
     try {
       const document = checkDocument(input);
-      await loadIntoCanvas(
-        canvas,
-        { version: document.fabricVersion, background: document.canvas.background, objects: document.objects },
-        controller.signal,
+      await history.withoutRecording(() =>
+        loadIntoCanvas(
+          canvas,
+          { version: document.fabricVersion, background: document.canvas.background, objects: document.objects },
+          controller.signal,
+        ),
       );
       if (controller.signal.aborted) throw new Error('aborted');
       if (loadOptions.restoreCanvasSize ?? true) {
@@ -183,6 +208,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
         metadata: { ...document.metadata },
       };
       rebuildIndex();
+      history.reset();
       canvas.requestRenderAll();
       events.emit('load:success', { document });
       return document;
@@ -241,9 +267,10 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
   function newDocument(newOptions?: NewDocumentOptions): void {
     ensureUsable();
     activeLoad?.abort();
-    canvas.clear();
+    history.withoutRecording(() => canvas.clear());
     objectsById.clear();
     documentInfo = createDocumentInfo(newOptions);
+    history.reset();
   }
 
   function getObjectById(id: string): FabricObject | undefined {
@@ -254,10 +281,25 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     return objectsById.get(id);
   }
 
+  async function travelThroughHistory(direction: 'undo' | 'redo'): Promise<boolean> {
+    ensureUsable();
+    try {
+      return await history[direction]();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      const engineError = new DocumentEngineError('HISTORY_FAILED', `Could not ${direction}: ${reason}`, {
+        cause: error,
+      });
+      events.emit('history:error', { error: engineError });
+      throw engineError;
+    }
+  }
+
   function destroy(): void {
     if (destroyed) return;
     destroyed = true;
     activeLoad?.abort();
+    history.destroy();
     canvas.off('object:added', handleObjectAdded);
     canvas.off('object:removed', handleObjectRemoved);
     objectsById.clear();
@@ -281,6 +323,23 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
       registry.register(definition);
     },
     getObjectById,
+    transaction(label, work) {
+      ensureUsable();
+      return history.transaction(label, work);
+    },
+    commit(label = 'Edit') {
+      ensureUsable();
+      return history.commit(label);
+    },
+    undo: () => travelThroughHistory('undo'),
+    redo: () => travelThroughHistory('redo'),
+    canUndo: () => history.state().canUndo,
+    canRedo: () => history.state().canRedo,
+    getHistory: () => history.labels(),
+    clearHistory() {
+      ensureUsable();
+      history.reset();
+    },
     on: (name, handler) => events.on(name, handler),
     destroy,
   };

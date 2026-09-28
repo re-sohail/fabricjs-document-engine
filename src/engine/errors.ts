@@ -7,6 +7,7 @@ export type DocumentErrorCode =
   | 'LOAD_FAILED'
   | 'STORAGE_MISSING'
   | 'SAVE_FAILED'
+  | 'HISTORY_FAILED'
   | 'ENGINE_DESTROYED';
 
 export interface DocumentIssue {
