@@ -1,5 +1,23 @@
 # fabricjs-document-engine
 
+## 0.8.0
+
+### Minor Changes
+
+- Hardening. Imported documents are now treated as untrusted:
+  - `__proto__`, `constructor` and `prototype` keys are removed before Fabric sees them.
+  - Image addresses are checked after `resolveUrl` and before any fetch. `javascript:`, `file:` and non-image `data:` addresses are refused.
+  - Object count and nesting depth are limited, and all of this is configurable with `limits: { maxObjects, maxDepth, isAllowedUrl }`. Violations reject with the new `UNSAFE_DOCUMENT` error. `secureDocument`, `refuseUnsafeImageUrls` and `isSafeImageUrl` are exported for server-side checks.
+  
+  Undo history now has a memory budget, `history.maxBytes` (default 64 MB), that drops the oldest steps first.
+  
+  Fixes:
+  - Undo no longer slows down quadratically with large documents. It was 149 ms at 5,000 objects in Firefox and is now 28 ms.
+  - Recovery copies keep image data as bytes, so they work in WebKit, which cannot store `Blob` values in IndexedDB.
+  - Raster exports use `canvas.toBlob` instead of a base64 round trip, which lowers peak memory.
+  
+  The test suite now also runs in Firefox and WebKit, checks importing in Node, and covers cancellation, custom objects inside groups and clip paths, and performance budgets. The repository gains published compatibility and performance results, plus accessibility guidance for editor controls.
+
 ## 0.7.0
 
 ### Minor Changes

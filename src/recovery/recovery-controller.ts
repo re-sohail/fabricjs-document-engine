@@ -40,6 +40,34 @@ interface RecoveryControllerOptions extends RecoveryOptions {
   onError: (error: unknown) => void;
 }
 
+interface StoredFile {
+  type: string;
+  bytes: ArrayBuffer;
+}
+
+type StoredRecord = Omit<RecoveryRecord, 'files'> & { files: Record<string, StoredFile | Blob> };
+
+async function toStoredFiles(files: Record<string, Blob>): Promise<Record<string, StoredFile>> {
+  const entries = await Promise.all(
+    Object.entries(files).map(async ([url, blob]) => [url, { type: blob.type, bytes: await blob.arrayBuffer() }] as const),
+  );
+  return Object.fromEntries(entries);
+}
+
+function fromStoredFiles(files: Record<string, StoredFile | Blob> | undefined): Record<string, Blob> {
+  const restored: Record<string, Blob> = {};
+  for (const [url, file] of Object.entries(files ?? {})) {
+    restored[url] = file instanceof Blob ? file : new Blob([file.bytes], { type: file.type });
+  }
+  return restored;
+}
+
+function fromStoredRecord(value: unknown): RecoveryRecord | undefined {
+  if (!isRecoveryRecord(value)) return undefined;
+  const stored = value as unknown as StoredRecord;
+  return { ...stored, files: fromStoredFiles(stored.files) };
+}
+
 const documentKeyPrefix = 'document:';
 const unloadKeyPrefix = 'unload:';
 const loadingKey = 'loading';
@@ -125,7 +153,7 @@ export function createRecoveryController(options: RecoveryControllerOptions): Re
     if (!options.shouldWrite()) return;
     const document = options.createDocument();
     const record = createRecord(document, await captureTabOnlyFiles(document));
-    await store.set(documentKey(document.id), record);
+    await store.set(documentKey(document.id), { ...record, files: await toStoredFiles(record.files) });
     options.onCheckpoint(record);
   }
 
@@ -138,16 +166,15 @@ export function createRecoveryController(options: RecoveryControllerOptions): Re
       return;
     }
     const record = createRecord(document, Object.fromEntries(readyFiles));
-    store.set(documentKey(document.id), record).then(() => options.onCheckpoint(record), options.onError);
+    toStoredFiles(record.files)
+      .then((files) => store.set(documentKey(document.id), { ...record, files }))
+      .then(() => options.onCheckpoint(record), options.onError);
   }
 
   async function read(documentId: string): Promise<RecoveryRecord | undefined> {
     await queue;
     const [checkpoint, unloadCopy] = await Promise.all([store.get(documentKey(documentId)), store.get(unloadKey(documentId))]);
-    return newerRecord(
-      isRecoveryRecord(checkpoint) ? checkpoint : undefined,
-      isRecoveryRecord(unloadCopy) ? unloadCopy : undefined,
-    );
+    return newerRecord(fromStoredRecord(checkpoint), fromStoredRecord(unloadCopy));
   }
 
   function cancel(): void {

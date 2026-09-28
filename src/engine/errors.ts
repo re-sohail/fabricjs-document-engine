@@ -3,6 +3,7 @@ import type { ExportProblem } from '../export/preflight-export';
 
 export type DocumentErrorCode =
   | 'INVALID_DOCUMENT'
+  | 'UNSAFE_DOCUMENT'
   | 'UNSUPPORTED_SCHEMA'
   | 'UNKNOWN_OBJECT_TYPE'
   | 'INVALID_CUSTOM_OBJECT'

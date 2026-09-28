@@ -1,6 +1,6 @@
 {
   "name": "fabricjs-document-engine",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Turn an existing Fabric.js canvas into a dependable editable document: stable object ids, versioned save and load, undo and redo, safe autosave with conflict protection, custom objects and clear errors.",
   "keywords": [
     "fabric",
@@ -84,7 +84,7 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tools.json",
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
-    "test:browser": "vitest run --project browser-fabric7 --project browser-fabric6",
+    "test:browser": "vitest run --project browser-fabric7 --project browser-fabric6 --project browser-firefox --project browser-webkit",
     "test:watch": "vitest",
     "lint:publint": "publint --strict",
     "lint:attw": "attw --pack . --profile node16",

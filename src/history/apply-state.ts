@@ -49,10 +49,12 @@ export async function applyStateChange(canvas: StaticCanvas, change: StateChange
   try {
     const outgoing = current.filter((object) => !kept.has(object));
     if (outgoing.length > 0) canvas.remove(...outgoing);
+    let onCanvas = canvas.getObjects();
     arranged.forEach((object, index) => {
-      if (canvas.getObjects()[index] === object) return;
+      if (onCanvas[index] === object) return;
       if (object.canvas === canvas) canvas.moveObjectTo(object, index);
       else canvas.insertAt(index, object);
+      onCanvas = canvas.getObjects();
     });
   } finally {
     canvas.renderOnAddRemove = renderOnAddRemove;

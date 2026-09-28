@@ -61,3 +61,5 @@ export type {
 } from './versions/document-version';
 export { createDocumentStateStore } from './state/document-state-store';
 export type { DocumentState, DocumentStateStore } from './state/document-state-store';
+export { isSafeImageUrl, refuseUnsafeImageUrls, secureDocument } from './security/content-limits';
+export type { ContentLimits } from './security/content-limits';

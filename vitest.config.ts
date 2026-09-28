@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitest/config';
 import { playwright } from '@vitest/browser-playwright';
 
-function browserProject(name: string) {
+function browserProject(name: string, browser: 'chromium' | 'firefox' | 'webkit' = 'chromium') {
   return {
     name,
     include: ['tests/**/*.browser.test.ts'],
@@ -9,7 +9,7 @@ function browserProject(name: string) {
       enabled: true,
       provider: playwright(),
       headless: true,
-      instances: [{ browser: 'chromium' as const, name }],
+      instances: [{ browser, name }],
     },
   };
 }
@@ -36,6 +36,12 @@ export default defineConfig({
           alias: [{ find: /^fabric$/, replacement: 'fabric6' }],
         },
         test: browserProject('browser-fabric6'),
+      },
+      {
+        test: browserProject('browser-firefox', 'firefox'),
+      },
+      {
+        test: browserProject('browser-webkit', 'webkit'),
       },
     ],
   },

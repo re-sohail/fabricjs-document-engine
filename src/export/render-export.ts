@@ -43,8 +43,15 @@ export function renderRaster(
   format: 'png' | 'jpeg' | 'webp',
   scale: number,
   quality: number,
-): string {
-  return canvas.toDataURL({ ...area, format, quality, multiplier: scale, enableRetinaScaling: false });
+): Promise<Blob> {
+  const rendered = canvas.toCanvasElement(scale, area);
+  return new Promise((resolve, reject) => {
+    rendered.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error(`The browser could not encode ${format}`))),
+      mimeTypes[format],
+      quality,
+    );
+  });
 }
 
 export function renderSvg(canvas: StaticCanvas, area: ExportRect, scale: number): string {
@@ -53,13 +60,4 @@ export function renderSvg(canvas: StaticCanvas, area: ExportRect, scale: number)
     width: String(area.width * scale),
     height: String(area.height * scale),
   });
-}
-
-export function dataUrlToBlob(dataUrl: string): Blob {
-  const [header, payload = ''] = dataUrl.split(',');
-  const mimeType = /data:([^;]+)/.exec(header ?? '')?.[1] ?? 'application/octet-stream';
-  const binary = atob(payload);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return new Blob([bytes], { type: mimeType });
 }

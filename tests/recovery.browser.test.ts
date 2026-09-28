@@ -39,13 +39,13 @@ afterEach(async () => {
 });
 
 describe(`recovery on Fabric ${fabric.version}`, () => {
-  it('stores values, blobs and keys in IndexedDB', async () => {
+  it('stores values, bytes and keys in IndexedDB', async () => {
     const store = uniqueDatabase();
-    const blob = new Blob(['hello'], { type: 'text/plain' });
-    await store.set('document:a', { name: 'A', blob });
-    const value = (await store.get('document:a')) as { name: string; blob: Blob };
+    const bytes = new TextEncoder().encode('hello').buffer;
+    await store.set('document:a', { name: 'A', bytes });
+    const value = (await store.get('document:a')) as { name: string; bytes: ArrayBuffer };
     expect(value.name).toBe('A');
-    expect(await value.blob.text()).toBe('hello');
+    expect(new TextDecoder().decode(value.bytes)).toBe('hello');
     expect(await store.keys()).toEqual(['document:a']);
     await store.delete('document:a');
     expect(await store.get('document:a')).toBeUndefined();

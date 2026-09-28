@@ -40,18 +40,53 @@ describe('diffSnapshots', () => {
 
 describe('createHistoryStack', () => {
   it('drops the oldest step when the limit is reached', () => {
-    const stack = createHistoryStack(2);
+    const stack = createHistoryStack({ steps: 2, bytes: Infinity });
     ['one', 'two', 'three'].forEach((label) => stack.record(step(label)));
     expect(stack.undoLabels()).toEqual(['three', 'two']);
   });
 
   it('clears redo when a new step is recorded', () => {
-    const stack = createHistoryStack(10);
+    const stack = createHistoryStack({ steps: 10, bytes: Infinity });
     stack.record(step('one'));
     stack.returnRedo(stack.takeUndo()!);
     expect(stack.redoLabels()).toEqual(['one']);
     stack.record(step('two'));
     expect(stack.redoLabels()).toEqual([]);
+  });
+});
+
+describe('history memory budget', () => {
+  function stepWithPayload(label: string, characters: number): HistoryStep {
+    return {
+      label,
+      before: { objects: new Map([['a', null]]), order: null },
+      after: { objects: new Map([['a', 'x'.repeat(characters)]]), order: null },
+    };
+  }
+
+  it('drops the oldest steps once the byte budget is used up', () => {
+    const stack = createHistoryStack({ steps: 100, bytes: 5000 });
+    ['one', 'two', 'three', 'four'].forEach((label) => stack.record(stepWithPayload(label, 1000)));
+    expect(stack.undoLabels()).toEqual(['four', 'three']);
+    expect(stack.usedBytes()).toBeLessThanOrEqual(5000);
+  });
+
+  it('always keeps the newest step even when it is larger than the budget', () => {
+    const stack = createHistoryStack({ steps: 100, bytes: 100 });
+    stack.record(stepWithPayload('huge', 10_000));
+    expect(stack.undoLabels()).toEqual(['huge']);
+  });
+
+  it('keeps the byte count right while stepping back and forth', () => {
+    const stack = createHistoryStack({ steps: 100, bytes: Infinity });
+    stack.record(stepWithPayload('one', 100));
+    stack.record(stepWithPayload('two', 100));
+    const used = stack.usedBytes();
+    stack.returnRedo(stack.takeUndo()!);
+    stack.returnUndo(stack.takeRedo()!);
+    expect(stack.usedBytes()).toBe(used);
+    stack.clear();
+    expect(stack.usedBytes()).toBe(0);
   });
 });
 

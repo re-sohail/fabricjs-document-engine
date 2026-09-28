@@ -8,6 +8,7 @@ import type { StateChange } from './snapshot';
 
 export interface HistoryOptions {
   limit?: number;
+  maxBytes?: number;
 }
 
 export interface HistoryState {
@@ -79,7 +80,10 @@ export function describePendingChanges(changes: readonly PendingChange[]): strin
 
 export function createHistory(options: HistoryControllerOptions): HistoryController {
   const { canvas, serializeObjects, onChange, onContentChange } = options;
-  const stack = createHistoryStack(Math.max(1, options.limit ?? 100));
+  const stack = createHistoryStack({
+    steps: Math.max(1, options.limit ?? 100),
+    bytes: Math.max(0, options.maxBytes ?? 64 * 1024 * 1024),
+  });
   let snapshot = createSnapshot(serializeObjects());
   let pendingChanges: PendingChange[] = [];
   let flushScheduled = false;

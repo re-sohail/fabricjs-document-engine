@@ -16,6 +16,7 @@ Fabric already draws objects, handles interaction and serializes to JSON. This p
 - **Versions and migration.** Keep named versions, restore any of them as a new revision, and open plain Fabric JSON or documents saved by older versions of this package.
 - **Reliable undo and redo.** One user action is one undo step. Transactions group several code changes into one labelled step, and ids survive undo and redo.
 - **React ready, framework free.** Hooks for React, and a small state store for any other framework. Your toolbar and UI stay yours.
+- **Hardened.** Imported documents are cleaned and size-limited, undo history has a memory budget, and every feature is tested in Chromium, Firefox and WebKit. See the [compatibility and performance results](https://github.com/re-sohail/fabricjs-document-engine/blob/main/docs/compatibility.md).
 - **Fabric 6 and 7.** Every release is tested against both.
 
 ## Install
@@ -439,6 +440,7 @@ Keep project data such as titles, owners and tags in `metadata` with `engine.upd
 | `bindKeyboardShortcuts(engine, { target? })` | Adds the undo and redo shortcuts. Returns an unbind function. |
 | `engine.on(event, handler)` | Listens to `load:start`, `document:change`, `load:success`, `load:error`, `save:start`, `save:success`, `save:error`, `save:retry`, `save:status`, `assets:warning`, `recovery:checkpoint`, `recovery:restored`, `recovery:error`, `export:success`, `export:error`, `version:created`, `version:restored`, `version:error`, `history:change` or `history:error`. Returns an unsubscribe function. |
 | `engine.destroy()` | Stops listening to the canvas and cancels a running load. |
+| `secureDocument(value, limits?)` / `refuseUnsafeImageUrls(objects, isAllowed?)` / `isSafeImageUrl(url)` | The safety checks, exported for server-side validation. |
 | `createDocumentStateStore(engine)` | Framework-free `{ getSnapshot, subscribe, destroy }` state for toolbars. |
 | `validateDocument(value)` | Returns a list of issues with the exact path of each problem. |
 
@@ -448,6 +450,7 @@ Every failure is a `DocumentEngineError` with a `code` you can switch on:
 
 | Code | Meaning |
 | --- | --- |
+| `UNSAFE_DOCUMENT` | The document broke a safety rule: an unsafe image address, too many objects, or nesting too deep. `error.issues` lists each one. |
 | `INVALID_DOCUMENT` | The document shape is wrong. `error.issues` lists each path, such as `objects[3].objects[1].type`. |
 | `UNSUPPORTED_SCHEMA` | The document was written by a newer version of this package. |
 | `UNKNOWN_OBJECT_TYPE` | A type is not registered. `error.unknownTypes` lists them. |
@@ -490,8 +493,32 @@ A failed load never clears or half-fills your canvas.
 | 6 | PNG, JPEG, SVG and JSON export with preflight checks | 0.5.0 |
 | 7 | Named versions and schema migrations | 0.6.0 |
 | 8 | React adapter and examples | 0.7.0 |
-| 9 | Hardening and benchmarks | |
+| 9 | Hardening and benchmarks | 0.8.0 |
 | 10 | Stable API | 1.0.0 |
+
+## Imported content and limits
+
+Documents often come from users, so the engine treats them as untrusted:
+
+- Keys named `__proto__`, `constructor` or `prototype` are removed before Fabric sees them. Fabric copies every key onto the object it creates, so these keys could otherwise change an object's prototype.
+- Image addresses are checked after `assets.resolveUrl`, before anything is fetched. `http:`, `https:`, `blob:`, relative addresses and `data:image/...` are allowed. `javascript:`, `file:` and non-image `data:` addresses are refused with `UNSAFE_DOCUMENT`.
+- A document with more than 50,000 objects, or nested more than 100 levels deep, is refused before loading, so a hostile file cannot freeze the tab.
+
+```ts
+createDocumentEngine({
+  canvas,
+  limits: {
+    maxObjects: 10_000,
+    maxDepth: 40,
+    isAllowedUrl: (url) => url.startsWith('https://cdn.example.com/'),
+  },
+  history: { limit: 100, maxBytes: 32 * 1024 * 1024 },
+});
+```
+
+`history.maxBytes` caps the memory undo history uses. The default is 64 MB, and the oldest steps are dropped first. SVG export escapes text, so text such as `<script>` inside a text box stays text.
+
+Accessibility guidance for your toolbar, status text and dialogs is in [docs/accessibility.md](https://github.com/re-sohail/fabricjs-document-engine/blob/main/docs/accessibility.md).
 
 ## Troubleshooting
 

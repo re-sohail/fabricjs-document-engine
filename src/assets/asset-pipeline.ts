@@ -6,6 +6,7 @@ import { findImageReferences } from './asset-references';
 import type { ImageReference } from './asset-references';
 import { findUnavailableFonts } from './font-check';
 import type { FontLoader } from './font-check';
+import { refuseUnsafeImageUrls } from '../security/content-limits';
 import { findMissingImages, isCrossOriginUrl, isPortableUrl } from './image-check';
 
 export type AssetWarningCode = 'IMAGE_CROSS_ORIGIN' | 'FONT_UNAVAILABLE' | 'ASSET_NOT_PORTABLE' | 'IMAGE_REPLACED';
@@ -162,10 +163,16 @@ async function replaceMissingImages(
   return { stillMissing, warnings };
 }
 
-export async function prepareAssetsForLoad(input: FabricDocument, options: AssetOptions, signal: AbortSignal): Promise<PreparedDocument> {
+export async function prepareAssetsForLoad(
+  input: FabricDocument,
+  options: AssetOptions,
+  signal: AbortSignal,
+  isAllowedUrl?: (url: string) => boolean,
+): Promise<PreparedDocument> {
   const document = cloneDocument(input);
   const { resolveUrl } = options;
   if (resolveUrl) await rewriteUrls(document, async (url) => resolveUrl(url));
+  refuseUnsafeImageUrls(document.objects, isAllowedUrl);
 
   const report = await inspectAssets(document, options, signal);
   if (options.requireFonts && report.unavailableFonts.length > 0) {

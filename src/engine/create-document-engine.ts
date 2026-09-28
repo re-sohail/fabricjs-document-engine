@@ -9,7 +9,7 @@ import { normalizeExportOptions } from '../export/export-options';
 import type { ExportFormat, ExportOptions } from '../export/export-options';
 import { preflightExport } from '../export/preflight-export';
 import type { ExportPreflight } from '../export/preflight-export';
-import { dataUrlToBlob, mimeTypes, renderRaster, renderSvg, withExportView } from '../export/render-export';
+import { mimeTypes, renderRaster, renderSvg, withExportView } from '../export/render-export';
 import { CURRENT_SCHEMA_VERSION } from '../document/document-format';
 import type { DocumentInfo, FabricDocument } from '../document/document-format';
 import { createDocumentInfo } from '../document/create-document';
@@ -24,6 +24,8 @@ import { collectSerializedTypes, walkObjects } from '../fabric/walk-objects';
 import { createHistory } from '../history/create-history';
 import type { HistoryOptions, HistoryState } from '../history/create-history';
 import { migrateDocument } from '../migrations/migrate-document';
+import { secureDocument } from '../security/content-limits';
+import type { ContentLimits } from '../security/content-limits';
 import type { MigrationContext } from '../migrations/migrate-document';
 import { createRecoveryController, restoreRecordedFiles } from '../recovery/recovery-controller';
 import { summarize, supportsVersions, versionsToPrune } from '../versions/document-version';
@@ -49,6 +51,7 @@ export interface DocumentEngineOptions {
   assets?: AssetOptions;
   recovery?: RecoveryOptions;
   versions?: VersionOptions;
+  limits?: ContentLimits;
 }
 
 export interface LoadOptions {
@@ -213,6 +216,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
   const history = createHistory({
     canvas,
     limit: options.history?.limit,
+    maxBytes: options.history?.maxBytes,
     serializeObjects: () => {
       rebuildIndex();
       return serializeCanvas(canvas, registry.propertiesToInclude()).objects;
@@ -334,13 +338,18 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     try {
       await recovery?.markLoadStarted(documentId);
       if (controller.signal.aborted) throw new Error('aborted');
-      const { document: migrated, migratedFrom } = migrateDocument(input, {
+      const { document: migrated, migratedFrom } = migrateDocument(secureDocument(input, options.limits), {
         canvasWidth: canvas.getWidth(),
         canvasHeight: canvas.getHeight(),
         ...importDetails,
       });
       const checked = checkDocument(migrated);
-      const { document, warnings } = await prepareAssetsForLoad(checked, assetOptions, controller.signal);
+      const { document, warnings } = await prepareAssetsForLoad(
+        checked,
+        assetOptions,
+        controller.signal,
+        options.limits?.isAllowedUrl,
+      );
       if (controller.signal.aborted) throw new Error('aborted');
       await history.withoutRecording(() =>
         loadIntoCanvas(
@@ -608,12 +617,11 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
         const area = resolveExportArea(canvas, settings.area, settings.padding);
         const content =
           format === 'svg'
-            ? renderSvg(canvas, area, settings.scale)
+            ? Promise.resolve(new Blob([renderSvg(canvas, area, settings.scale)], { type: mimeTypes.svg }))
             : renderRaster(canvas, area, format, settings.scale, settings.quality);
         return { area, content };
       });
-      const blob =
-        format === 'svg' ? new Blob([rendered.content], { type: mimeTypes.svg }) : dataUrlToBlob(rendered.content);
+      const blob = await rendered.content;
       return {
         format,
         mimeType: blob.type || mimeTypes[format],
