@@ -11,6 +11,7 @@ Fabric already draws objects, handles interaction and serializes to JSON. This p
 - **Safe saving.** It tracks unsaved changes and can autosave. Only one save runs at a time, so a slow older save can never overwrite newer work. Revision checks catch another tab or device saving the same document, and failed saves are retried with backoff.
 - **Your storage.** Plug in any backend with two functions, or use the built-in memory and localStorage adapters. No hosted service is needed.
 - **Assets and fonts.** Documents record the images and fonts they need. When a document is opened, every image and font is checked first. You get the exact list of what is missing, can offer replacements, and tab-only images are uploaded when you save.
+- **Recovery.** Unsaved work is copied to IndexedDB while the user edits, and again at the moment the tab is closed or refreshed. After a crash or refresh you can offer to restore it, including images that only existed in the old tab.
 - **Reliable undo and redo.** One user action is one undo step. Transactions group several code changes into one labelled step, and ids survive undo and redo.
 - **Fabric 6 and 7.** Every release is tested against both.
 
@@ -175,6 +176,34 @@ await engine.replaceImage('/old-logo.png', '/new-logo.png');
 
 `replaceImage` swaps every image that uses a URL. Each image keeps its size on the page, and the change is one undo step. `engine.getAssetManifest()` returns the manifest for the current canvas.
 
+## Recovery
+
+```ts
+import { createIndexedDbRecovery } from 'fabricjs-document-engine/recovery';
+
+const engine = createDocumentEngine({
+  canvas,
+  storage,
+  recovery: { store: createIndexedDbRecovery(), interval: 2000 },
+});
+
+const [latest] = await engine.getRecoverableDocuments();
+if (latest && confirm(`Restore unsaved work from ${new Date(latest.savedAt).toLocaleString()}?`)) {
+  await engine.restoreRecovery(latest.documentId);
+} else if (latest) {
+  await engine.discardRecovery(latest.documentId);
+}
+```
+
+- **Checkpoints.** While there are unsaved changes, a copy is written at most once every `interval` ms (default 2000). Nothing is written while the document is saved.
+- **Closing or refreshing.** Browsers do not let IndexedDB finish writing while a page unloads. So when the tab is hidden or closed, the engine also writes an immediate copy to localStorage. The newest copy wins when you read it back.
+- **Tab-only images.** Images with `blob:` URLs vanish on refresh. Checkpoints keep the image data, and restoring creates fresh URLs for it.
+- **After a save.** When a save covers every change, the copy is removed. If the tab closes during a save, the copy stays, so work is never lost between the edit and the server.
+- **Restoring.** The restored document is marked as unsaved and keeps the revision it was based on. If the server moved on meanwhile, the next save reports `SAVE_CONFLICT` instead of overwriting newer work.
+- **Interrupted loads.** A marker is kept while a document loads. If the tab crashes during loading, `engine.getInterruptedLoad()` returns `{ documentId, startedAt }` on the next start, so you can skip or discard that document instead of crashing again.
+- `engine.flushRecovery()` writes a copy right now. `engine.getRecovery(id?)` reads one.
+- `createMemoryRecovery()` keeps copies in memory, which is useful for tests. To use your own storage, implement `{ get, set, delete, keys }`, plus an optional synchronous `setNow` for the moment the page closes.
+
 ## Custom objects
 
 ```ts
@@ -282,6 +311,10 @@ Keep project data such as titles, owners and tags in `metadata` with `engine.upd
 | `engine.getAssetManifest()` | Lists the images and fonts used on the canvas. |
 | `engine.checkAssets()` | Resolves to `{ manifest, missingImages, unavailableFonts, warnings }` for the current canvas. |
 | `engine.replaceImage(oldUrl, newUrl)` | Replaces every image with that URL as one undo step. Resolves to the number of images replaced. |
+| `engine.getRecoverableDocuments()` | Lists recovery copies, newest first. |
+| `engine.restoreRecovery(id?)` / `engine.discardRecovery(id?)` | Loads or deletes a recovery copy. The default is the current document. |
+| `engine.getRecovery(id?)` / `engine.flushRecovery()` | Reads a copy, or writes one now. |
+| `engine.getInterruptedLoad()` | Returns the load that was running when the tab last crashed, if any. |
 | `engine.transaction(label, work)` | Runs `work` and records everything it changed as one undo step. Returns what `work` returns. |
 | `engine.commit(label?)` | Records changes made since the last step. Returns `false` when nothing changed. |
 | `engine.undo()` / `engine.redo()` | Resolves to `true` when a step was applied. Calls run one after another. |
@@ -289,7 +322,7 @@ Keep project data such as titles, owners and tags in `metadata` with `engine.upd
 | `engine.getHistory()` | Returns `{ undo, redo }` label lists, newest first. |
 | `engine.clearHistory()` | Forgets all steps. Loading a document or starting a new one also does this. |
 | `bindKeyboardShortcuts(engine, { target? })` | Adds the undo and redo shortcuts. Returns an unbind function. |
-| `engine.on(event, handler)` | Listens to `load:start`, `load:success`, `load:error`, `save:start`, `save:success`, `save:error`, `save:retry`, `save:status`, `assets:warning`, `history:change` or `history:error`. Returns an unsubscribe function. |
+| `engine.on(event, handler)` | Listens to `load:start`, `load:success`, `load:error`, `save:start`, `save:success`, `save:error`, `save:retry`, `save:status`, `assets:warning`, `recovery:checkpoint`, `recovery:restored`, `recovery:error`, `history:change` or `history:error`. Returns an unsubscribe function. |
 | `engine.destroy()` | Stops listening to the canvas and cancels a running load. |
 | `validateDocument(value)` | Returns a list of issues with the exact path of each problem. |
 
@@ -312,6 +345,9 @@ Every failure is a `DocumentEngineError` with a `code` you can switch on:
 | `SAVE_CANCELLED` | A queued save was dropped because another document was opened. |
 | `DOCUMENT_NOT_FOUND` | The built-in adapters have no document with that id. |
 | `HISTORY_FAILED` | Undo or redo could not rebuild an object, for example because an image is gone. The step is kept and the canvas is unchanged. |
+| `RECOVERY_MISSING` | A recovery method was called without `recovery: { store }`. |
+| `RECOVERY_NOT_FOUND` | There is no recovery copy for that document. |
+| `RECOVERY_FAILED` | Writing a recovery copy failed, for example because storage is full. It is delivered as a `recovery:error` event and never interrupts editing. |
 | `STORAGE_MISSING` | `load` or `save` was called without a storage adapter. |
 | `INVALID_CUSTOM_OBJECT` | A registered class has no static `type`, or it does not extend a Fabric class. |
 | `ENGINE_DESTROYED` | The engine was used after `destroy()`. |
@@ -326,7 +362,7 @@ A failed load never clears or half-fills your canvas.
 | 2 | Undo and redo with transactions | 0.1.0 |
 | 3 | Safe saving: dirty state, autosave, stale-response protection | 0.2.0 |
 | 4 | Assets and fonts | 0.3.0 |
-| 5 | Recovery after a refresh or crash | |
+| 5 | Recovery after a refresh or crash | 0.4.0 |
 | 6 | PNG, JPEG, SVG and JSON export with preflight checks | |
 | 7 | Named versions and schema migrations | |
 | 8 | React adapter and examples | |

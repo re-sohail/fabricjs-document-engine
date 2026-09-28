@@ -36,3 +36,5 @@ export type {
   UploadRequest,
 } from './assets/asset-pipeline';
 export type { FontLoader } from './assets/font-check';
+export type { InterruptedLoad, RecoveryOptions, RecoveryRecord } from './recovery/recovery-controller';
+export type { RecoveryStore } from './recovery/recovery-store';

@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsdown';
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/storage.ts'],
+  entry: ['src/index.ts', 'src/storage.ts', 'src/recovery.ts'],
   format: ['esm', 'cjs'],
   unbundle: true,
   platform: 'neutral',

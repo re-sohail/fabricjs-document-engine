@@ -16,6 +16,9 @@ export type DocumentErrorCode =
   | 'SAVE_CANCELLED'
   | 'DOCUMENT_NOT_FOUND'
   | 'HISTORY_FAILED'
+  | 'RECOVERY_MISSING'
+  | 'RECOVERY_NOT_FOUND'
+  | 'RECOVERY_FAILED'
   | 'ENGINE_DESTROYED';
 
 export interface DocumentIssue {

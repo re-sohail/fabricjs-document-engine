@@ -17,6 +17,8 @@ import type { CustomObjectDefinition } from '../fabric/object-registry';
 import { collectSerializedTypes, walkObjects } from '../fabric/walk-objects';
 import { createHistory } from '../history/create-history';
 import type { HistoryOptions, HistoryState } from '../history/create-history';
+import { createRecoveryController, restoreRecordedFiles } from '../recovery/recovery-controller';
+import type { InterruptedLoad, RecoveryOptions, RecoveryRecord } from '../recovery/recovery-controller';
 import type { AutosaveOptions } from '../save/autosave-scheduler';
 import type { RetryOptions } from '../save/retry';
 import { createSaveController } from '../save/save-controller';
@@ -35,6 +37,7 @@ export interface DocumentEngineOptions {
   autosave?: boolean | AutosaveOptions;
   saveRetry?: RetryOptions;
   assets?: AssetOptions;
+  recovery?: RecoveryOptions;
 }
 
 export interface LoadOptions {
@@ -53,6 +56,9 @@ export interface DocumentEngineEvents {
   'save:status': SaveState;
   'history:change': HistoryState;
   'history:error': { error: DocumentEngineError };
+  'recovery:checkpoint': { documentId: string; savedAt: string };
+  'recovery:restored': { document: FabricDocument };
+  'recovery:error': { error: DocumentEngineError };
 }
 
 export interface DocumentEngine {
@@ -79,6 +85,12 @@ export interface DocumentEngine {
   getAssetManifest(): AssetManifest;
   checkAssets(): Promise<AssetReport>;
   replaceImage(oldUrl: string, newUrl: string): Promise<number>;
+  flushRecovery(): Promise<void>;
+  getRecoverableDocuments(): Promise<RecoveryRecord[]>;
+  getRecovery(documentId?: string): Promise<RecoveryRecord | undefined>;
+  restoreRecovery(documentId?: string, options?: LoadOptions): Promise<FabricDocument>;
+  discardRecovery(documentId?: string): Promise<void>;
+  getInterruptedLoad(): Promise<InterruptedLoad | undefined>;
   on<Name extends keyof DocumentEngineEvents>(
     name: Name,
     handler: (payload: DocumentEngineEvents[Name]) => void,
@@ -167,7 +179,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
       return serializeCanvas(canvas, registry.propertiesToInclude()).objects;
     },
     onChange: (state) => events.emit('history:change', state),
-    onContentChange: () => saving.noteContentChange(),
+    onContentChange: () => noteContentChange(),
   });
 
   const saving = createSaveController({
@@ -181,10 +193,36 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     autosave: options.autosave === true ? {} : (options.autosave ?? false),
     onStateChange: (state) => events.emit('save:status', state),
     onStart: (document) => events.emit('save:start', { document }),
-    onSuccess: (document) => events.emit('save:success', { document }),
+    onSuccess: (document) => {
+      if (recovery && !saving.state().isDirty) void recovery.remove(document.id);
+      events.emit('save:success', { document });
+    },
     onError: (error) => events.emit('save:error', { error }),
     onRetry: (event) => events.emit('save:retry', event),
   });
+
+  const recovery = options.recovery
+    ? createRecoveryController({
+        ...options.recovery,
+        createDocument: () => toDocument(),
+        shouldWrite: () => !destroyed && saving.state().isDirty,
+        onCheckpoint: (record) =>
+          events.emit('recovery:checkpoint', { documentId: record.documentId, savedAt: record.savedAt }),
+        onError: (error) => {
+          const reason = error instanceof Error ? error.message : String(error);
+          events.emit('recovery:error', {
+            error: new DocumentEngineError('RECOVERY_FAILED', `Could not write the recovery copy: ${reason}`, {
+              cause: error,
+            }),
+          });
+        },
+      })
+    : undefined;
+
+  function noteContentChange(): void {
+    saving.noteContentChange();
+    recovery?.schedule();
+  }
 
   function toDocument(): FabricDocument {
     ensureUsable();
@@ -242,9 +280,12 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     activeLoad?.abort();
     const controller = new AbortController();
     activeLoad = controller;
-    events.emit('load:start', { documentId: describeDocumentId(input) });
+    const documentId = describeDocumentId(input);
+    events.emit('load:start', { documentId });
 
     try {
+      await recovery?.markLoadStarted(documentId);
+      if (controller.signal.aborted) throw new Error('aborted');
       const checked = checkDocument(input);
       const { document, warnings } = await prepareAssetsForLoad(checked, assetOptions, controller.signal);
       if (controller.signal.aborted) throw new Error('aborted');
@@ -267,6 +308,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
       };
       rebuildIndex();
       history.reset();
+      recovery?.cancel();
       saving.startSession(document.revision ?? 0);
       canvas.requestRenderAll();
       if (warnings.length > 0) events.emit('assets:warning', { warnings });
@@ -277,7 +319,10 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
       events.emit('load:error', { error: engineError });
       throw engineError;
     } finally {
-      if (activeLoad === controller) activeLoad = null;
+      if (activeLoad === controller) {
+        activeLoad = null;
+        await recovery?.markLoadFinished();
+      }
     }
   }
 
@@ -322,6 +367,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     documentInfo = createDocumentInfo(newOptions);
     uploadedUrls.clear();
     history.reset();
+    recovery?.cancel();
     saving.startSession(0);
   }
 
@@ -361,6 +407,25 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     return images.length;
   }
 
+  function requireRecovery(): NonNullable<typeof recovery> {
+    ensureUsable();
+    if (!recovery) {
+      throw new DocumentEngineError('RECOVERY_MISSING', 'Pass recovery: { store } to createDocumentEngine to use recovery');
+    }
+    return recovery;
+  }
+
+  async function restoreRecovery(documentId?: string, loadOptions?: LoadOptions): Promise<FabricDocument> {
+    const source = requireRecovery();
+    const id = documentId ?? documentInfo.id;
+    const record = await source.read(id);
+    if (!record) throw new DocumentEngineError('RECOVERY_NOT_FOUND', `There is no recovery copy for document "${id}"`);
+    const loaded = await loadDocument(await restoreRecordedFiles(record), loadOptions);
+    noteContentChange();
+    events.emit('recovery:restored', { document: loaded });
+    return loaded;
+  }
+
   async function travelThroughHistory(direction: 'undo' | 'redo'): Promise<boolean> {
     ensureUsable();
     try {
@@ -381,6 +446,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     activeLoad?.abort();
     history.destroy();
     saving.destroy();
+    recovery?.destroy();
     canvas.off('object:added', handleObjectAdded);
     canvas.off('object:removed', handleObjectRemoved);
     objectsById.clear();
@@ -393,7 +459,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     updateMetadata(changes) {
       ensureUsable();
       documentInfo = { ...documentInfo, metadata: { ...documentInfo.metadata, ...changes } };
-      saving.noteContentChange();
+      noteContentChange();
     },
     newDocument,
     toDocument,
@@ -410,6 +476,12 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     getAssetManifest: () => toDocument().assets ?? { images: [], fonts: [] },
     checkAssets,
     replaceImage,
+    flushRecovery: async () => requireRecovery().flush(),
+    getRecoverableDocuments: async () => requireRecovery().list(),
+    getRecovery: async (documentId) => requireRecovery().read(documentId ?? documentInfo.id),
+    restoreRecovery,
+    discardRecovery: async (documentId) => requireRecovery().remove(documentId ?? documentInfo.id),
+    getInterruptedLoad: async () => requireRecovery().interruptedLoad(),
     transaction(label, work) {
       ensureUsable();
       return history.transaction(label, work);

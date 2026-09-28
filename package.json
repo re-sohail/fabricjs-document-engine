@@ -1,6 +1,6 @@
 {
   "name": "fabricjs-document-engine",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Turn an existing Fabric.js canvas into a dependable editable document: stable object ids, versioned save and load, undo and redo, safe autosave with conflict protection, custom objects and clear errors.",
   "keywords": [
     "fabric",
@@ -18,7 +18,8 @@
     "autosave",
     "editor",
     "typescript",
-    "storage"
+    "storage",
+    "recovery"
   ],
   "license": "MIT",
   "author": "Sohail Khan (https://me.jscrate.dev)",
@@ -51,6 +52,16 @@
       "require": {
         "types": "./dist/storage.d.cts",
         "default": "./dist/storage.cjs"
+      }
+    },
+    "./recovery": {
+      "import": {
+        "types": "./dist/recovery.d.ts",
+        "default": "./dist/recovery.js"
+      },
+      "require": {
+        "types": "./dist/recovery.d.cts",
+        "default": "./dist/recovery.cjs"
       }
     },
     "./package.json": "./package.json"

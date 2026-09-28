@@ -70,7 +70,7 @@ function pointTo(references: readonly ImageReference[], url: string): void {
   }
 }
 
-async function rewriteUrls(document: FabricDocument, rewrite: (url: string, references: ImageReference[]) => Promise<string>): Promise<void> {
+export async function rewriteUrls(document: FabricDocument, rewrite: (url: string, references: ImageReference[]) => Promise<string>): Promise<void> {
   const groups = groupByUrl(findImageReferences(document.objects));
   await Promise.all(
     [...groups].map(async ([url, references]) => {

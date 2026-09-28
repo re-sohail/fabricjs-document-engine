@@ -1,5 +1,11 @@
 # fabricjs-document-engine
 
+## 0.4.0
+
+### Minor Changes
+
+- Recovery. Adds the `fabricjs-document-engine/recovery` entry with `createIndexedDbRecovery` and `createMemoryRecovery`, and the `recovery: { store, interval }` option. While there are unsaved changes, the engine writes throttled checkpoints to IndexedDB, including the data of tab-only `blob:` images. When the tab is hidden, refreshed or closed, it also writes an immediate copy to localStorage, because browsers drop IndexedDB writes during unload. Copies are removed once a save covers every change, so a save interrupted by a crash keeps its copy. Adds `getRecoverableDocuments`, `getRecovery`, `restoreRecovery`, `discardRecovery` and `flushRecovery`. A restored document is marked unsaved and keeps its base revision, so a server that moved on reports `SAVE_CONFLICT` instead of being overwritten. Adds `getInterruptedLoad` to detect a crash during loading, plus the `recovery:checkpoint`, `recovery:restored` and `recovery:error` events.
+
 ## 0.3.0
 
 ### Minor Changes
