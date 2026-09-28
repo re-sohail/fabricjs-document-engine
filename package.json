@@ -1,6 +1,6 @@
 {
   "name": "fabricjs-document-engine",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Turn an existing Fabric.js canvas into a dependable editable document: stable object ids, versioned save and load, undo and redo, safe autosave with conflict protection, custom objects and clear errors.",
   "keywords": [
     "fabric",
@@ -19,7 +19,9 @@
     "editor",
     "typescript",
     "storage",
-    "recovery"
+    "recovery",
+    "react",
+    "react hooks"
   ],
   "license": "MIT",
   "author": "Sohail Khan (https://me.jscrate.dev)",
@@ -64,10 +66,20 @@
         "default": "./dist/recovery.cjs"
       }
     },
+    "./react": {
+      "import": {
+        "types": "./dist/react.d.ts",
+        "default": "./dist/react.js"
+      },
+      "require": {
+        "types": "./dist/react.d.cts",
+        "default": "./dist/react.cjs"
+      }
+    },
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsdown && npm run lint:publint && npm run lint:attw",
+    "build": "tsdown && node scripts/verify-build.mjs && npm run lint:publint && npm run lint:attw",
     "dev": "tsdown --watch",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tools.json",
     "test": "vitest run",
@@ -80,7 +92,8 @@
     "release": "changeset publish"
   },
   "peerDependencies": {
-    "fabric": "^6.0.0 || ^7.0.0"
+    "fabric": "^6.0.0 || ^7.0.0",
+    "react": "^18.0.0 || ^19.0.0"
   },
   "publishConfig": {
     "access": "public",
@@ -101,13 +114,22 @@
     "@arethetypeswrong/cli": "^0.18.5",
     "@changesets/cli": "^3.0.3",
     "@types/node": "^22.20.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "@vitest/browser-playwright": "^5.0.2",
     "fabric": "^7.4.0",
     "fabric6": "npm:fabric@^6.9.1",
     "playwright": "^1.63.0",
     "publint": "^0.3.24",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "tsdown": "^0.23.0",
     "typescript": "^5.9.3",
     "vitest": "^5.0.2"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   }
 }

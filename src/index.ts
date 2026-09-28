@@ -59,3 +59,5 @@ export type {
   VersionStorage,
   VersionSummary,
 } from './versions/document-version';
+export { createDocumentStateStore } from './state/document-state-store';
+export type { DocumentState, DocumentStateStore } from './state/document-state-store';

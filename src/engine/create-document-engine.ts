@@ -72,6 +72,7 @@ export interface ExportResult {
 
 export interface DocumentEngineEvents {
   'load:start': { documentId: string | undefined };
+  'document:change': { documentId: string };
   'load:success': { document: FabricDocument; warnings: AssetWarning[]; migratedFrom: number | undefined };
   'assets:warning': { warnings: AssetWarning[] };
   'load:error': { error: DocumentEngineError };
@@ -364,6 +365,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
       saving.startSession(document.revision ?? 0);
       canvas.requestRenderAll();
       if (warnings.length > 0) events.emit('assets:warning', { warnings });
+      events.emit('document:change', { documentId: document.id });
       events.emit('load:success', { document, warnings, migratedFrom });
       return document;
     } catch (error) {
@@ -517,6 +519,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     history.reset();
     recovery?.cancel();
     saving.startSession(0);
+    events.emit('document:change', { documentId: documentInfo.id });
   }
 
   function getObjectById(id: string): FabricObject | undefined {

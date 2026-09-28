@@ -4,3 +4,4 @@ tests/
 .changeset/
 *.config.ts
 *.tsbuildinfo
+scripts/

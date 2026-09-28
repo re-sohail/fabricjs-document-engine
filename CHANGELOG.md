@@ -1,5 +1,11 @@
 # fabricjs-document-engine
 
+## 0.7.0
+
+### Minor Changes
+
+- Developer experience. Adds the `fabricjs-document-engine/react` entry, marked `'use client'`: `useDocumentEngine(canvas, options)` creates the engine when the canvas exists and destroys it on unmount (safe in StrictMode), `useDocumentState(engine)` exposes `isDirty`, `isSaving`, `saveStatus`, `revision`, `canUndo`, `canRedo`, undo and redo labels, `isLoading`, `loadError` and `assetWarnings`, and `useDocumentEvent`, `DocumentEngineProvider` and `useEngine` are included too. React is an optional peer dependency and the core never imports it; the build now verifies both. Adds the framework-free `createDocumentStateStore(engine)`, which only listens to the engine while it has subscribers, and the `document:change` event. The repository gains storage examples (REST with revision checks, key-value stores and uploads) and a troubleshooting guide.
+
 ## 0.6.0
 
 ### Minor Changes

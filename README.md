@@ -15,6 +15,7 @@ Fabric already draws objects, handles interaction and serializes to JSON. This p
 - **Dependable export.** PNG, JPEG, WebP, SVG and editable JSON. You choose the area, scale and background. A preflight check means an export either succeeds or tells you exactly which image or font prevents it.
 - **Versions and migration.** Keep named versions, restore any of them as a new revision, and open plain Fabric JSON or documents saved by older versions of this package.
 - **Reliable undo and redo.** One user action is one undo step. Transactions group several code changes into one labelled step, and ids survive undo and redo.
+- **React ready, framework free.** Hooks for React, and a small state store for any other framework. Your toolbar and UI stay yours.
 - **Fabric 6 and 7.** Every release is tested against both.
 
 ## Install
@@ -40,6 +41,42 @@ localStorage.setItem(document.id, JSON.stringify(document));
 await engine.loadDocument(JSON.parse(localStorage.getItem(document.id)!));
 ```
 
+## React
+
+```tsx
+import { useDocumentEngine, useDocumentState, DocumentEngineProvider, useEngine } from 'fabricjs-document-engine/react';
+
+function Editor({ canvas }: { canvas: Canvas | null }) {
+  const engine = useDocumentEngine(canvas, { storage, autosave: true });
+  return (
+    <DocumentEngineProvider engine={engine}>
+      <YourToolbar />
+    </DocumentEngineProvider>
+  );
+}
+
+function YourToolbar() {
+  const engine = useEngine();
+  const state = useDocumentState(engine);
+  if (!engine || !state) return null;
+  return (
+    <>
+      <button disabled={!state.canUndo} onClick={() => engine.undo()}>Undo {state.undoLabel}</button>
+      <button disabled={!state.isDirty} onClick={() => engine.save()}>Save</button>
+      <span>{state.saveStatus}</span>
+    </>
+  );
+}
+```
+
+- `useDocumentEngine(canvas, options)` creates the engine once your Fabric canvas exists and destroys it on unmount. It returns `null` until then. Options are read when the engine is created.
+- `useDocumentState(engine)` returns `{ documentId, isLoading, loadError, saveStatus, isDirty, isSaving, revision, lastSavedAt, saveError, canUndo, canRedo, undoLabel, redoLabel, assetWarnings }` and re-renders when any of them change.
+- `useDocumentEvent(engine, 'save:error', handler)` subscribes to any event with the latest handler.
+- `DocumentEngineProvider` and `useEngine()` pass the engine to deeply nested toolbars.
+- The React entry is marked `'use client'` for Next.js. React is an optional peer dependency, so the core never imports it.
+
+For other frameworks, `createDocumentStateStore(engine)` gives the same state as `{ getSnapshot, subscribe }`, which fits Svelte stores, Vue's `shallowRef` and similar tools.
+
 ## Saving and loading through storage
 
 The built-in adapters are the quickest way to start:
@@ -58,6 +95,8 @@ await engine.save();
 ```
 
 Both adapters also have `listDocuments()` and `deleteDocument(id)`. To build on another key-value store, use `createKeyValueStorage({ read, write, remove, keys }, prefix)`.
+
+More adapters, including a REST API with revision checks and image uploads, are in [docs/storage-examples.md](https://github.com/re-sohail/fabricjs-document-engine/blob/main/docs/storage-examples.md).
 
 ### Your own backend
 
@@ -398,8 +437,9 @@ Keep project data such as titles, owners and tags in `metadata` with `engine.upd
 | `engine.getHistory()` | Returns `{ undo, redo }` label lists, newest first. |
 | `engine.clearHistory()` | Forgets all steps. Loading a document or starting a new one also does this. |
 | `bindKeyboardShortcuts(engine, { target? })` | Adds the undo and redo shortcuts. Returns an unbind function. |
-| `engine.on(event, handler)` | Listens to `load:start`, `load:success`, `load:error`, `save:start`, `save:success`, `save:error`, `save:retry`, `save:status`, `assets:warning`, `recovery:checkpoint`, `recovery:restored`, `recovery:error`, `export:success`, `export:error`, `version:created`, `version:restored`, `version:error`, `history:change` or `history:error`. Returns an unsubscribe function. |
+| `engine.on(event, handler)` | Listens to `load:start`, `document:change`, `load:success`, `load:error`, `save:start`, `save:success`, `save:error`, `save:retry`, `save:status`, `assets:warning`, `recovery:checkpoint`, `recovery:restored`, `recovery:error`, `export:success`, `export:error`, `version:created`, `version:restored`, `version:error`, `history:change` or `history:error`. Returns an unsubscribe function. |
 | `engine.destroy()` | Stops listening to the canvas and cancels a running load. |
+| `createDocumentStateStore(engine)` | Framework-free `{ getSnapshot, subscribe, destroy }` state for toolbars. |
 | `validateDocument(value)` | Returns a list of issues with the exact path of each problem. |
 
 ## Errors
@@ -449,9 +489,13 @@ A failed load never clears or half-fills your canvas.
 | 5 | Recovery after a refresh or crash | 0.4.0 |
 | 6 | PNG, JPEG, SVG and JSON export with preflight checks | 0.5.0 |
 | 7 | Named versions and schema migrations | 0.6.0 |
-| 8 | React adapter and examples | |
+| 8 | React adapter and examples | 0.7.0 |
 | 9 | Hardening and benchmarks | |
 | 10 | Stable API | 1.0.0 |
+
+## Troubleshooting
+
+Common problems and fixes are in [docs/troubleshooting.md](https://github.com/re-sohail/fabricjs-document-engine/blob/main/docs/troubleshooting.md).
 
 ## License
 
