@@ -1,5 +1,11 @@
 # fabricjs-document-engine
 
+## 0.5.0
+
+### Minor Changes
+
+- Export. Adds `engine.export({ format, scale, quality, area, padding, background, signal })` for PNG, JPEG, WebP, SVG and editable JSON. The area can be the canvas, the content, the selection or any rectangle. Exports always use document coordinates whatever the current zoom and pan, and never change the canvas, the history or the unsaved state. A JPEG with no background gets white instead of black. Before rendering, a preflight finds broken images, cross-origin images that would taint a picture export, and missing fonts. The export then either succeeds or rejects with `EXPORT_BLOCKED`, whose `problems` list names each URL or font and the objects that use it. Adds `engine.preflightExport(options)`, the `downloadExport(result, fileName)` helper, the `export:success` and `export:error` events, and the `INVALID_EXPORT_OPTIONS`, `EXPORT_ABORTED` and `EXPORT_FAILED` errors.
+
 ## 0.4.0
 
 ### Minor Changes

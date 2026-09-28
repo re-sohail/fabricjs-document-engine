@@ -15,6 +15,9 @@ function browserProject(name: string) {
 }
 
 export default defineConfig({
+  server: {
+    host: true,
+  },
   test: {
     projects: [
       {

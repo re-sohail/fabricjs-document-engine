@@ -4,6 +4,12 @@ import type { AssetManifest } from '../assets/asset-manifest';
 import { inspectAssets, prepareAssetsForLoad, prepareAssetsForSave } from '../assets/asset-pipeline';
 import type { AssetOptions, AssetReport, AssetWarning } from '../assets/asset-pipeline';
 import { isSameUrl } from '../assets/image-check';
+import { resolveExportArea } from '../export/export-area';
+import { normalizeExportOptions } from '../export/export-options';
+import type { ExportFormat, ExportOptions } from '../export/export-options';
+import { preflightExport } from '../export/preflight-export';
+import type { ExportPreflight } from '../export/preflight-export';
+import { dataUrlToBlob, mimeTypes, renderRaster, renderSvg, withExportView } from '../export/render-export';
 import { CURRENT_SCHEMA_VERSION } from '../document/document-format';
 import type { DocumentInfo, FabricDocument } from '../document/document-format';
 import { createDocumentInfo } from '../document/create-document';
@@ -44,6 +50,16 @@ export interface LoadOptions {
   restoreCanvasSize?: boolean;
 }
 
+export interface ExportResult {
+  format: ExportFormat;
+  mimeType: string;
+  blob: Blob;
+  width: number;
+  height: number;
+  warnings: AssetWarning[];
+  document?: FabricDocument;
+}
+
 export interface DocumentEngineEvents {
   'load:start': { documentId: string | undefined };
   'load:success': { document: FabricDocument; warnings: AssetWarning[] };
@@ -59,6 +75,8 @@ export interface DocumentEngineEvents {
   'recovery:checkpoint': { documentId: string; savedAt: string };
   'recovery:restored': { document: FabricDocument };
   'recovery:error': { error: DocumentEngineError };
+  'export:success': { format: ExportFormat; width: number; height: number; warnings: AssetWarning[] };
+  'export:error': { error: DocumentEngineError };
 }
 
 export interface DocumentEngine {
@@ -85,6 +103,8 @@ export interface DocumentEngine {
   getAssetManifest(): AssetManifest;
   checkAssets(): Promise<AssetReport>;
   replaceImage(oldUrl: string, newUrl: string): Promise<number>;
+  export(options: ExportOptions): Promise<ExportResult>;
+  preflightExport(options: ExportOptions): Promise<ExportPreflight>;
   flushRecovery(): Promise<void>;
   getRecoverableDocuments(): Promise<RecoveryRecord[]>;
   getRecovery(documentId?: string): Promise<RecoveryRecord | undefined>;
@@ -407,6 +427,105 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     return images.length;
   }
 
+  function fontsOnCanvas(): ReturnType<typeof buildAssetManifest>['fonts'] {
+    rebuildIndex();
+    return buildAssetManifest(serializeCanvas(canvas, registry.propertiesToInclude()).objects).fonts;
+  }
+
+  async function checkBeforeExport(exportOptions: ExportOptions): Promise<ExportPreflight> {
+    ensureUsable();
+    const { format } = normalizeExportOptions(exportOptions);
+    return preflightExport(canvas, format, format === 'json' ? [] : fontsOnCanvas(), assetOptions);
+  }
+
+  function describeProblems(check: ExportPreflight): string {
+    return check.problems.map((problem) => problem.message).join('; ');
+  }
+
+  async function exportContent(exportOptions: ExportOptions): Promise<ExportResult> {
+    const settings = normalizeExportOptions(exportOptions);
+    const stopIfCancelled = (): void => {
+      if (settings.signal?.aborted) throw new DocumentEngineError('EXPORT_ABORTED', 'The export was cancelled');
+    };
+    stopIfCancelled();
+
+    if (settings.format === 'json') {
+      const prepared = await prepareAssetsForSave(toDocument(), assetOptions, uploadedUrls);
+      stopIfCancelled();
+      return {
+        format: 'json',
+        mimeType: mimeTypes.json,
+        blob: new Blob([JSON.stringify(prepared.document)], { type: mimeTypes.json }),
+        width: prepared.document.canvas.width,
+        height: prepared.document.canvas.height,
+        warnings: prepared.warnings,
+        document: prepared.document,
+      };
+    }
+
+    const check = await checkBeforeExport(settings);
+    stopIfCancelled();
+    if (!check.ok) {
+      throw new DocumentEngineError('EXPORT_BLOCKED', `The export cannot run: ${describeProblems(check)}`, {
+        problems: check.problems,
+      });
+    }
+
+    const format = settings.format;
+    try {
+      const rendered = withExportView(canvas, settings.background, format, () => {
+        const area = resolveExportArea(canvas, settings.area, settings.padding);
+        const content =
+          format === 'svg'
+            ? renderSvg(canvas, area, settings.scale)
+            : renderRaster(canvas, area, format, settings.scale, settings.quality);
+        return { area, content };
+      });
+      const blob =
+        format === 'svg' ? new Blob([rendered.content], { type: mimeTypes.svg }) : dataUrlToBlob(rendered.content);
+      return {
+        format,
+        mimeType: blob.type || mimeTypes[format],
+        blob,
+        width: Math.round(rendered.area.width * settings.scale),
+        height: Math.round(rendered.area.height * settings.scale),
+        warnings: check.warnings,
+      };
+    } catch (error) {
+      if (isDocumentEngineError(error)) throw error;
+      if ((error as { name?: unknown } | null)?.name === 'SecurityError') {
+        const problem = {
+          code: 'CROSS_ORIGIN_IMAGE' as const,
+          message: 'The browser blocked the export because the canvas shows an image from another site without CORS',
+          objectIds: [],
+        };
+        throw new DocumentEngineError('EXPORT_BLOCKED', problem.message, { problems: [problem], cause: error });
+      }
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new DocumentEngineError('EXPORT_FAILED', `Fabric could not export the canvas: ${reason}`, { cause: error });
+    }
+  }
+
+  async function exportDocument(exportOptions: ExportOptions): Promise<ExportResult> {
+    ensureUsable();
+    try {
+      const result = await exportContent(exportOptions);
+      events.emit('export:success', {
+        format: result.format,
+        width: result.width,
+        height: result.height,
+        warnings: result.warnings,
+      });
+      return result;
+    } catch (error) {
+      const engineError = isDocumentEngineError(error)
+        ? error
+        : new DocumentEngineError('EXPORT_FAILED', String(error), { cause: error });
+      events.emit('export:error', { error: engineError });
+      throw engineError;
+    }
+  }
+
   function requireRecovery(): NonNullable<typeof recovery> {
     ensureUsable();
     if (!recovery) {
@@ -476,6 +595,8 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     getAssetManifest: () => toDocument().assets ?? { images: [], fonts: [] },
     checkAssets,
     replaceImage,
+    export: exportDocument,
+    preflightExport: checkBeforeExport,
     flushRecovery: async () => requireRecovery().flush(),
     getRecoverableDocuments: async () => requireRecovery().list(),
     getRecovery: async (documentId) => requireRecovery().read(documentId ?? documentInfo.id),

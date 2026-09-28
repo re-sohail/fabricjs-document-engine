@@ -3,6 +3,7 @@ export type {
   DocumentEngine,
   DocumentEngineEvents,
   DocumentEngineOptions,
+  ExportResult,
   LoadOptions,
 } from './engine/create-document-engine';
 export { DocumentEngineError, createConflictError, isDocumentEngineError } from './engine/errors';
@@ -38,3 +39,13 @@ export type {
 export type { FontLoader } from './assets/font-check';
 export type { InterruptedLoad, RecoveryOptions, RecoveryRecord } from './recovery/recovery-controller';
 export type { RecoveryStore } from './recovery/recovery-store';
+export type {
+  ExportArea,
+  ExportBackground,
+  ExportFormat,
+  ExportOptions,
+  ExportRect,
+} from './export/export-options';
+export type { ExportPreflight, ExportProblem, ExportProblemCode } from './export/preflight-export';
+export { downloadExport } from './export/download-export';
+export type { DownloadableExport } from './export/download-export';

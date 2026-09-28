@@ -12,6 +12,7 @@ Fabric already draws objects, handles interaction and serializes to JSON. This p
 - **Your storage.** Plug in any backend with two functions, or use the built-in memory and localStorage adapters. No hosted service is needed.
 - **Assets and fonts.** Documents record the images and fonts they need. When a document is opened, every image and font is checked first. You get the exact list of what is missing, can offer replacements, and tab-only images are uploaded when you save.
 - **Recovery.** Unsaved work is copied to IndexedDB while the user edits, and again at the moment the tab is closed or refreshed. After a crash or refresh you can offer to restore it, including images that only existed in the old tab.
+- **Dependable export.** PNG, JPEG, WebP, SVG and editable JSON. You choose the area, scale and background. A preflight check means an export either succeeds or tells you exactly which image or font prevents it.
 - **Reliable undo and redo.** One user action is one undo step. Transactions group several code changes into one labelled step, and ids survive undo and redo.
 - **Fabric 6 and 7.** Every release is tested against both.
 
@@ -176,6 +177,47 @@ await engine.replaceImage('/old-logo.png', '/new-logo.png');
 
 `replaceImage` swaps every image that uses a URL. Each image keeps its size on the page, and the change is one undo step. `engine.getAssetManifest()` returns the manifest for the current canvas.
 
+## Export
+
+```ts
+import { downloadExport } from 'fabricjs-document-engine';
+
+const result = await engine.export({ format: 'png', scale: 2 });
+downloadExport(result, 'poster.png');
+```
+
+`result` is `{ format, mimeType, blob, width, height, warnings }`. JSON exports also include `document`.
+
+| Option | Values | Default |
+| --- | --- | --- |
+| `format` | `'png'`, `'jpeg'`, `'webp'`, `'svg'` or `'json'` | required |
+| `scale` | Output size multiplier, such as `2` for retina | `1` |
+| `quality` | 0 to 1, for JPEG and WebP | `0.92` |
+| `area` | `'canvas'`, `'content'` (every object), `'selection'`, or `{ left, top, width, height }` | `'canvas'` |
+| `padding` | Extra space around `content` or `selection` | `0` |
+| `background` | `'keep'`, `'transparent'` or any CSS color | `'keep'` |
+| `signal` | An `AbortSignal` to cancel | |
+
+- The current zoom and pan do not matter. Exports always use document coordinates, and the view is restored afterwards.
+- A JPEG has no transparency, so an empty or transparent background becomes white instead of black.
+- The export never changes the canvas, the history or the unsaved state.
+- A JSON export is the same portable document a save produces, including uploaded images when `assets.upload` is set.
+
+### Preflight and errors
+
+Before rendering, the engine checks the objects on the canvas:
+
+- **`MISSING_IMAGE`**: an image failed to load.
+- **`CROSS_ORIGIN_IMAGE`**: an image from another site without CORS would make the browser block a PNG, JPEG or WebP export. SVG and JSON are not affected.
+- **`MISSING_FONT`**: a font is not available and `assets.requireFonts` is on. Otherwise you get a `FONT_UNAVAILABLE` warning.
+
+If any problem is found, `export` rejects with `EXPORT_BLOCKED`, and `error.problems` lists each `{ code, message, url?, family?, objectIds }`. You can run the same check first to show it in your UI:
+
+```ts
+const check = await engine.preflightExport({ format: 'png' });
+if (!check.ok) showProblems(check.problems);
+```
+
 ## Recovery
 
 ```ts
@@ -311,6 +353,9 @@ Keep project data such as titles, owners and tags in `metadata` with `engine.upd
 | `engine.getAssetManifest()` | Lists the images and fonts used on the canvas. |
 | `engine.checkAssets()` | Resolves to `{ manifest, missingImages, unavailableFonts, warnings }` for the current canvas. |
 | `engine.replaceImage(oldUrl, newUrl)` | Replaces every image with that URL as one undo step. Resolves to the number of images replaced. |
+| `engine.export(options)` | Exports PNG, JPEG, WebP, SVG or JSON. See [Export](#export). |
+| `engine.preflightExport(options)` | Resolves to `{ ok, problems, warnings }` without exporting. |
+| `downloadExport(result, fileName?)` | Starts a browser download of an export result. |
 | `engine.getRecoverableDocuments()` | Lists recovery copies, newest first. |
 | `engine.restoreRecovery(id?)` / `engine.discardRecovery(id?)` | Loads or deletes a recovery copy. The default is the current document. |
 | `engine.getRecovery(id?)` / `engine.flushRecovery()` | Reads a copy, or writes one now. |
@@ -322,7 +367,7 @@ Keep project data such as titles, owners and tags in `metadata` with `engine.upd
 | `engine.getHistory()` | Returns `{ undo, redo }` label lists, newest first. |
 | `engine.clearHistory()` | Forgets all steps. Loading a document or starting a new one also does this. |
 | `bindKeyboardShortcuts(engine, { target? })` | Adds the undo and redo shortcuts. Returns an unbind function. |
-| `engine.on(event, handler)` | Listens to `load:start`, `load:success`, `load:error`, `save:start`, `save:success`, `save:error`, `save:retry`, `save:status`, `assets:warning`, `recovery:checkpoint`, `recovery:restored`, `recovery:error`, `history:change` or `history:error`. Returns an unsubscribe function. |
+| `engine.on(event, handler)` | Listens to `load:start`, `load:success`, `load:error`, `save:start`, `save:success`, `save:error`, `save:retry`, `save:status`, `assets:warning`, `recovery:checkpoint`, `recovery:restored`, `recovery:error`, `export:success`, `export:error`, `history:change` or `history:error`. Returns an unsubscribe function. |
 | `engine.destroy()` | Stops listening to the canvas and cancels a running load. |
 | `validateDocument(value)` | Returns a list of issues with the exact path of each problem. |
 
@@ -345,6 +390,10 @@ Every failure is a `DocumentEngineError` with a `code` you can switch on:
 | `SAVE_CANCELLED` | A queued save was dropped because another document was opened. |
 | `DOCUMENT_NOT_FOUND` | The built-in adapters have no document with that id. |
 | `HISTORY_FAILED` | Undo or redo could not rebuild an object, for example because an image is gone. The step is kept and the canvas is unchanged. |
+| `EXPORT_BLOCKED` | The preflight found problems. `error.problems` lists each one with the objects involved. |
+| `INVALID_EXPORT_OPTIONS` | The format, scale, quality, area or padding is not valid, or the area is empty. |
+| `EXPORT_ABORTED` | The export was cancelled with its `signal`. |
+| `EXPORT_FAILED` | Fabric could not render the export. `error.cause` holds the original error. |
 | `RECOVERY_MISSING` | A recovery method was called without `recovery: { store }`. |
 | `RECOVERY_NOT_FOUND` | There is no recovery copy for that document. |
 | `RECOVERY_FAILED` | Writing a recovery copy failed, for example because storage is full. It is delivered as a `recovery:error` event and never interrupts editing. |
@@ -363,7 +412,7 @@ A failed load never clears or half-fills your canvas.
 | 3 | Safe saving: dirty state, autosave, stale-response protection | 0.2.0 |
 | 4 | Assets and fonts | 0.3.0 |
 | 5 | Recovery after a refresh or crash | 0.4.0 |
-| 6 | PNG, JPEG, SVG and JSON export with preflight checks | |
+| 6 | PNG, JPEG, SVG and JSON export with preflight checks | 0.5.0 |
 | 7 | Named versions and schema migrations | |
 | 8 | React adapter and examples | |
 | 9 | Hardening and benchmarks | |

@@ -1,4 +1,5 @@
 import type { FontAsset, ImageAsset } from '../assets/asset-manifest';
+import type { ExportProblem } from '../export/preflight-export';
 
 export type DocumentErrorCode =
   | 'INVALID_DOCUMENT'
@@ -19,6 +20,10 @@ export type DocumentErrorCode =
   | 'RECOVERY_MISSING'
   | 'RECOVERY_NOT_FOUND'
   | 'RECOVERY_FAILED'
+  | 'INVALID_EXPORT_OPTIONS'
+  | 'EXPORT_BLOCKED'
+  | 'EXPORT_FAILED'
+  | 'EXPORT_ABORTED'
   | 'ENGINE_DESTROYED';
 
 export interface DocumentIssue {
@@ -32,6 +37,7 @@ export interface DocumentEngineErrorDetails {
   unknownTypes?: string[];
   missingAssets?: ImageAsset[];
   missingFonts?: FontAsset[];
+  problems?: ExportProblem[];
   cause?: unknown;
   retryable?: boolean;
 }
@@ -42,6 +48,7 @@ export class DocumentEngineError extends Error {
   readonly unknownTypes: string[];
   readonly missingAssets: ImageAsset[];
   readonly missingFonts: FontAsset[];
+  readonly problems: ExportProblem[];
   readonly cause: unknown;
   readonly retryable: boolean;
 
@@ -53,6 +60,7 @@ export class DocumentEngineError extends Error {
     this.unknownTypes = details.unknownTypes ?? [];
     this.missingAssets = details.missingAssets ?? [];
     this.missingFonts = details.missingFonts ?? [];
+    this.problems = details.problems ?? [];
     this.cause = details.cause;
     this.retryable = details.retryable ?? false;
   }
