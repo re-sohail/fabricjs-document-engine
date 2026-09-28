@@ -19,6 +19,7 @@ export interface FabricDocument {
   id: string;
   createdAt: string;
   updatedAt: string;
+  revision?: number;
   fabricVersion?: string;
   canvas: DocumentCanvas;
   objects: SerializedFabricObject[];

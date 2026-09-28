@@ -3,10 +3,9 @@ export type {
   DocumentEngine,
   DocumentEngineEvents,
   DocumentEngineOptions,
-  DocumentStorage,
   LoadOptions,
 } from './engine/create-document-engine';
-export { DocumentEngineError, isDocumentEngineError } from './engine/errors';
+export { DocumentEngineError, createConflictError, isDocumentEngineError } from './engine/errors';
 export type { DocumentErrorCode, DocumentIssue, DocumentEngineErrorDetails } from './engine/errors';
 export type { Unsubscribe } from './engine/event-emitter';
 export { CURRENT_SCHEMA_VERSION } from './document/document-format';
@@ -22,3 +21,9 @@ export type { CustomObjectDefinition } from './fabric/object-registry';
 export type { HistoryOptions, HistoryState } from './history/create-history';
 export { bindKeyboardShortcuts } from './history/keyboard-shortcuts';
 export type { KeyboardShortcutOptions, UndoRedoTarget } from './history/keyboard-shortcuts';
+export type { DocumentStorage, SaveContext, SaveResult } from './storage/storage-contract';
+export type { SaveOptions, SaveRetryEvent, SaveState, SaveStatus } from './save/save-controller';
+export type { AutosaveOptions } from './save/autosave-scheduler';
+export type { RetryOptions } from './save/retry';
+export { bindUnsavedChangesWarning } from './save/unsaved-changes-warning';
+export type { UnsavedChangesSource } from './save/unsaved-changes-warning';

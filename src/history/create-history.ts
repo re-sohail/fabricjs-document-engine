@@ -33,6 +33,7 @@ interface HistoryControllerOptions extends HistoryOptions {
   canvas: StaticCanvas;
   serializeObjects: () => SerializedFabricObject[];
   onChange: (state: HistoryState) => void;
+  onContentChange: () => void;
 }
 
 interface PendingChange {
@@ -77,7 +78,7 @@ export function describePendingChanges(changes: readonly PendingChange[]): strin
 }
 
 export function createHistory(options: HistoryControllerOptions): HistoryController {
-  const { canvas, serializeObjects, onChange } = options;
+  const { canvas, serializeObjects, onChange, onContentChange } = options;
   const stack = createHistoryStack(Math.max(1, options.limit ?? 100));
   let snapshot = createSnapshot(serializeObjects());
   let pendingChanges: PendingChange[] = [];
@@ -105,6 +106,7 @@ export function createHistory(options: HistoryControllerOptions): HistoryControl
     snapshot = nextSnapshot;
     if (difference === null) return false;
     stack.record({ label, ...difference });
+    onContentChange();
     onChange(state());
     return true;
   }
@@ -224,6 +226,7 @@ export function createHistory(options: HistoryControllerOptions): HistoryControl
       }
       snapshot = createSnapshot(serializeObjects());
       moveTo(step);
+      onContentChange();
       onChange(state());
       return true;
     });

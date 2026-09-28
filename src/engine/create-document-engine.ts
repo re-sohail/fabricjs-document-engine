@@ -12,14 +12,14 @@ import type { CustomObjectDefinition } from '../fabric/object-registry';
 import { collectSerializedTypes, walkObjects } from '../fabric/walk-objects';
 import { createHistory } from '../history/create-history';
 import type { HistoryOptions, HistoryState } from '../history/create-history';
+import type { AutosaveOptions } from '../save/autosave-scheduler';
+import type { RetryOptions } from '../save/retry';
+import { createSaveController } from '../save/save-controller';
+import type { SaveOptions, SaveRetryEvent, SaveState } from '../save/save-controller';
+import type { DocumentStorage } from '../storage/storage-contract';
 import { DocumentEngineError, isDocumentEngineError } from './errors';
 import { createEventEmitter } from './event-emitter';
 import type { Unsubscribe } from './event-emitter';
-
-export interface DocumentStorage {
-  loadDocument(id: string): Promise<unknown>;
-  saveDocument(document: FabricDocument): Promise<void>;
-}
 
 export interface DocumentEngineOptions {
   canvas: StaticCanvas;
@@ -27,6 +27,8 @@ export interface DocumentEngineOptions {
   customObjects?: CustomObjectDefinition[];
   document?: NewDocumentOptions;
   history?: HistoryOptions;
+  autosave?: boolean | AutosaveOptions;
+  saveRetry?: RetryOptions;
 }
 
 export interface LoadOptions {
@@ -40,6 +42,8 @@ export interface DocumentEngineEvents {
   'save:start': { document: FabricDocument };
   'save:success': { document: FabricDocument };
   'save:error': { error: DocumentEngineError };
+  'save:retry': SaveRetryEvent;
+  'save:status': SaveState;
   'history:change': HistoryState;
   'history:error': { error: DocumentEngineError };
 }
@@ -52,7 +56,9 @@ export interface DocumentEngine {
   toDocument(): FabricDocument;
   loadDocument(document: unknown, options?: LoadOptions): Promise<FabricDocument>;
   load(documentId: string, options?: LoadOptions): Promise<FabricDocument>;
-  save(): Promise<FabricDocument>;
+  save(options?: SaveOptions): Promise<FabricDocument>;
+  isDirty(): boolean;
+  getSaveState(): SaveState;
   registerObject(definition: CustomObjectDefinition): void;
   transaction<Result>(label: string, work: () => Result): Result;
   commit(label?: string): boolean;
@@ -81,6 +87,10 @@ function describeDocumentId(value: unknown): string | undefined {
 
 export function createDocumentEngine(options: DocumentEngineOptions): DocumentEngine {
   const { canvas, storage } = options;
+  if (options.autosave && !storage) {
+    throw new DocumentEngineError('STORAGE_MISSING', 'Autosave needs a storage adapter passed to createDocumentEngine');
+  }
+
   const registry = createObjectRegistry(options.customObjects);
   const events = createEventEmitter<DocumentEngineEvents>();
   const objectsById = new Map<string, FabricObject>();
@@ -130,6 +140,19 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
       return serializeCanvas(canvas, registry.propertiesToInclude()).objects;
     },
     onChange: (state) => events.emit('history:change', state),
+    onContentChange: () => saving.noteContentChange(),
+  });
+
+  const saving = createSaveController({
+    getStorage: () => requireStorage(),
+    createDocument: () => toDocument(),
+    retry: options.saveRetry,
+    autosave: options.autosave === true ? {} : (options.autosave ?? false),
+    onStateChange: (state) => events.emit('save:status', state),
+    onStart: (document) => events.emit('save:start', { document }),
+    onSuccess: (document) => events.emit('save:success', { document }),
+    onError: (error) => events.emit('save:error', { error }),
+    onRetry: (event) => events.emit('save:retry', event),
   });
 
   function toDocument(): FabricDocument {
@@ -142,6 +165,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
       id: documentInfo.id,
       createdAt: documentInfo.createdAt,
       updatedAt: documentInfo.updatedAt,
+      revision: saving.state().revision,
       canvas: { width: canvas.getWidth(), height: canvas.getHeight() },
       objects: serialized.objects,
       metadata: { ...documentInfo.metadata },
@@ -209,6 +233,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
       };
       rebuildIndex();
       history.reset();
+      saving.startSession(document.revision ?? 0);
       canvas.requestRenderAll();
       events.emit('load:success', { document });
       return document;
@@ -236,32 +261,22 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
       stored = await source.loadDocument(documentId);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      const engineError = new DocumentEngineError('LOAD_FAILED', `Storage could not load "${documentId}": ${reason}`, {
-        cause: error,
-      });
+      const engineError = isDocumentEngineError(error)
+        ? error
+        : new DocumentEngineError('LOAD_FAILED', `Storage could not load "${documentId}": ${reason}`, { cause: error });
       events.emit('load:error', { error: engineError });
       throw engineError;
     }
     return loadDocument(stored, loadOptions);
   }
 
-  async function save(): Promise<FabricDocument> {
-    ensureUsable();
-    const target = requireStorage();
-    const document = toDocument();
-    events.emit('save:start', { document });
+  function save(saveOptions?: SaveOptions): Promise<FabricDocument> {
     try {
-      await target.saveDocument(document);
+      ensureUsable();
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      const engineError = new DocumentEngineError('SAVE_FAILED', `Storage could not save the document: ${reason}`, {
-        cause: error,
-      });
-      events.emit('save:error', { error: engineError });
-      throw engineError;
+      return Promise.reject(error);
     }
-    events.emit('save:success', { document });
-    return document;
+    return saving.save(saveOptions);
   }
 
   function newDocument(newOptions?: NewDocumentOptions): void {
@@ -271,6 +286,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     objectsById.clear();
     documentInfo = createDocumentInfo(newOptions);
     history.reset();
+    saving.startSession(0);
   }
 
   function getObjectById(id: string): FabricObject | undefined {
@@ -300,6 +316,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     destroyed = true;
     activeLoad?.abort();
     history.destroy();
+    saving.destroy();
     canvas.off('object:added', handleObjectAdded);
     canvas.off('object:removed', handleObjectRemoved);
     objectsById.clear();
@@ -312,12 +329,15 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     updateMetadata(changes) {
       ensureUsable();
       documentInfo = { ...documentInfo, metadata: { ...documentInfo.metadata, ...changes } };
+      saving.noteContentChange();
     },
     newDocument,
     toDocument,
     loadDocument,
     load,
     save,
+    isDirty: () => saving.state().isDirty,
+    getSaveState: () => saving.state(),
     registerObject(definition) {
       ensureUsable();
       registry.register(definition);

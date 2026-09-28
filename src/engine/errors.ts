@@ -7,6 +7,9 @@ export type DocumentErrorCode =
   | 'LOAD_FAILED'
   | 'STORAGE_MISSING'
   | 'SAVE_FAILED'
+  | 'SAVE_CONFLICT'
+  | 'SAVE_CANCELLED'
+  | 'DOCUMENT_NOT_FOUND'
   | 'HISTORY_FAILED'
   | 'ENGINE_DESTROYED';
 
@@ -20,6 +23,7 @@ export interface DocumentEngineErrorDetails {
   issues?: DocumentIssue[];
   unknownTypes?: string[];
   cause?: unknown;
+  retryable?: boolean;
 }
 
 export class DocumentEngineError extends Error {
@@ -27,6 +31,7 @@ export class DocumentEngineError extends Error {
   readonly issues: DocumentIssue[];
   readonly unknownTypes: string[];
   readonly cause: unknown;
+  readonly retryable: boolean;
 
   constructor(code: DocumentErrorCode, message: string, details: DocumentEngineErrorDetails = {}) {
     super(message);
@@ -35,9 +40,17 @@ export class DocumentEngineError extends Error {
     this.issues = details.issues ?? [];
     this.unknownTypes = details.unknownTypes ?? [];
     this.cause = details.cause;
+    this.retryable = details.retryable ?? false;
   }
 }
 
 export function isDocumentEngineError(value: unknown): value is DocumentEngineError {
   return value instanceof DocumentEngineError;
+}
+
+export function createConflictError(documentId: string, expectedRevision: number, actualRevision: number): DocumentEngineError {
+  return new DocumentEngineError(
+    'SAVE_CONFLICT',
+    `Document "${documentId}" was saved somewhere else: expected revision ${expectedRevision} but storage has ${actualRevision}`,
+  );
 }

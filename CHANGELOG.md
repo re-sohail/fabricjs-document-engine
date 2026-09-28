@@ -1,5 +1,11 @@
 # fabricjs-document-engine
 
+## 0.2.0
+
+### Minor Changes
+
+- Reliable history. Undo and redo for adding, deleting, moving, resizing, rotating, restyling, reordering, grouping, ungrouping and text editing, with one undo step per user action. Adds `transaction(label, work)` (nested and async), `commit(label)`, `canUndo`/`canRedo`, `getHistory()` labels, a history limit, `history:change` and `history:error` events, and `bindKeyboardShortcuts`. These features first reached npm inside 0.1.0; 0.2.0 was skipped on npm so that npm versions match the roadmap from 0.3.0 on.
+
 ## 0.1.0
 
 ### Minor Changes

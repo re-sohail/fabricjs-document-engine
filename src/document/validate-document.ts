@@ -71,6 +71,9 @@ export function validateDocument(value: unknown): DocumentIssue[] {
   }
   if (typeof value.createdAt !== 'string') issues.push(invalid('createdAt', 'must be an ISO date string'));
   if (typeof value.updatedAt !== 'string') issues.push(invalid('updatedAt', 'must be an ISO date string'));
+  if (value.revision !== undefined && !(Number.isInteger(value.revision) && (value.revision as number) >= 0)) {
+    issues.push(invalid('revision', 'must be a whole number of zero or more when present'));
+  }
   if (!isPlainObject(value.metadata)) issues.push(invalid('metadata', 'must be an object'));
 
   if (!isPlainObject(value.canvas)) {
