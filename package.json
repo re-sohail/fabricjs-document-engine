@@ -1,0 +1,91 @@
+{
+  "name": "fabricjs-document-engine",
+  "version": "0.0.0",
+  "description": "Turn an existing Fabric.js canvas into a dependable editable document: stable object ids, versioned save and load, custom object registration and clear load errors.",
+  "keywords": [
+    "fabric",
+    "fabricjs",
+    "fabric.js",
+    "canvas",
+    "canvas editor",
+    "document",
+    "document engine",
+    "save",
+    "load",
+    "serialization",
+    "undo",
+    "redo",
+    "autosave",
+    "editor",
+    "typescript"
+  ],
+  "license": "MIT",
+  "author": "Sohail Khan (https://me.jscrate.dev)",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsdown && npm run lint:publint && npm run lint:attw",
+    "dev": "tsdown --watch",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tools.json",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:browser": "vitest run --project browser-fabric7 --project browser-fabric6",
+    "test:watch": "vitest",
+    "lint:publint": "publint --strict",
+    "lint:attw": "attw --pack . --profile node16",
+    "prepublishOnly": "npm run build",
+    "release": "changeset publish"
+  },
+  "peerDependencies": {
+    "fabric": "^6.0.0 || ^7.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/re-sohail/fabricjs-document-engine.git"
+  },
+  "homepage": "https://github.com/re-sohail/fabricjs-document-engine#readme",
+  "bugs": {
+    "url": "https://github.com/re-sohail/fabricjs-document-engine/issues"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
+    "@changesets/cli": "^3.0.3",
+    "@types/node": "^22.20.4",
+    "@vitest/browser-playwright": "^5.0.2",
+    "fabric": "^7.4.0",
+    "fabric6": "npm:fabric@^6.9.1",
+    "playwright": "^1.63.0",
+    "publint": "^0.3.24",
+    "tsdown": "^0.23.0",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.2"
+  }
+}

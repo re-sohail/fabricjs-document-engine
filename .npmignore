@@ -1,0 +1,6 @@
+src/
+tests/
+.github/
+.changeset/
+*.config.ts
+*.tsbuildinfo
