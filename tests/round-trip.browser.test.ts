@@ -173,17 +173,22 @@ describe(`round trip on Fabric ${fabric.version}`, () => {
     document.objects.push({ type: 'Image', src: '/definitely-missing-image.png', width: 10, height: 10 });
 
     const error = await engine.loadDocument(document).catch((reason: unknown) => reason);
-    expect(isDocumentEngineError(error) && error.code).toBe('LOAD_FAILED');
+    expect(isDocumentEngineError(error) && error.code).toBe('MISSING_ASSETS');
     expect(engine.canvas.getObjects()).toHaveLength(1);
   });
 
-  it('refuses to load a group that silently lost a child', async () => {
-    const engine = createEngine();
+  it('refuses to load a group that silently lost a child even when image checks are off', async () => {
+    const element = document.createElement('canvas');
+    document.body.append(element);
+    const canvas = new Canvas(element, { width: 100, height: 100 });
+    openCanvases.push(canvas);
+    const engine = createDocumentEngine({ canvas, assets: { checkImages: false } });
+    openEngines.push(engine);
     engine.canvas.add(new Group([new Rect({ width: 10, height: 10 })]));
-    const document = engine.toDocument();
-    document.objects[0]!.objects!.push({ type: 'Image', src: '/missing-inside-group.png', width: 10, height: 10 });
+    const saved = engine.toDocument();
+    saved.objects[0]!.objects!.push({ type: 'Image', src: '/missing-inside-group.png', width: 10, height: 10 });
 
-    const error = await engine.loadDocument(document).catch((reason: unknown) => reason);
+    const error = await engine.loadDocument(saved).catch((reason: unknown) => reason);
     expect(isDocumentEngineError(error) && error.code).toBe('LOAD_FAILED');
     expect(engine.canvas.getObjects()).toHaveLength(1);
     expect((engine.canvas.getObjects()[0] as Group).getObjects()).toHaveLength(1);

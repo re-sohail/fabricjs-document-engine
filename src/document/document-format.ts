@@ -1,3 +1,5 @@
+import type { AssetManifest } from '../assets/asset-manifest';
+
 export const CURRENT_SCHEMA_VERSION = 1;
 
 export interface SerializedFabricObject {
@@ -23,6 +25,7 @@ export interface FabricDocument {
   fabricVersion?: string;
   canvas: DocumentCanvas;
   objects: SerializedFabricObject[];
+  assets?: AssetManifest;
   metadata: Record<string, unknown>;
 }
 

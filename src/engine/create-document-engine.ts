@@ -1,4 +1,9 @@
 import type { FabricObject, StaticCanvas } from 'fabric';
+import { buildAssetManifest } from '../assets/asset-manifest';
+import type { AssetManifest } from '../assets/asset-manifest';
+import { inspectAssets, prepareAssetsForLoad, prepareAssetsForSave } from '../assets/asset-pipeline';
+import type { AssetOptions, AssetReport, AssetWarning } from '../assets/asset-pipeline';
+import { isSameUrl } from '../assets/image-check';
 import { CURRENT_SCHEMA_VERSION } from '../document/document-format';
 import type { DocumentInfo, FabricDocument } from '../document/document-format';
 import { createDocumentInfo } from '../document/create-document';
@@ -29,6 +34,7 @@ export interface DocumentEngineOptions {
   history?: HistoryOptions;
   autosave?: boolean | AutosaveOptions;
   saveRetry?: RetryOptions;
+  assets?: AssetOptions;
 }
 
 export interface LoadOptions {
@@ -37,7 +43,8 @@ export interface LoadOptions {
 
 export interface DocumentEngineEvents {
   'load:start': { documentId: string | undefined };
-  'load:success': { document: FabricDocument };
+  'load:success': { document: FabricDocument; warnings: AssetWarning[] };
+  'assets:warning': { warnings: AssetWarning[] };
   'load:error': { error: DocumentEngineError };
   'save:start': { document: FabricDocument };
   'save:success': { document: FabricDocument };
@@ -69,6 +76,9 @@ export interface DocumentEngine {
   getHistory(): { undo: string[]; redo: string[] };
   clearHistory(): void;
   getObjectById(id: string): FabricObject | undefined;
+  getAssetManifest(): AssetManifest;
+  checkAssets(): Promise<AssetReport>;
+  replaceImage(oldUrl: string, newUrl: string): Promise<number>;
   on<Name extends keyof DocumentEngineEvents>(
     name: Name,
     handler: (payload: DocumentEngineEvents[Name]) => void,
@@ -78,6 +88,21 @@ export interface DocumentEngine {
 
 interface ObjectEvent {
   target: FabricObject;
+}
+
+interface ReplaceableImage {
+  getSrc(): string;
+  setSrc(url: string, options?: { crossOrigin?: string | null }): Promise<unknown>;
+  crossOrigin?: string | null;
+  width: number;
+  height: number;
+  scaleX: number;
+  scaleY: number;
+}
+
+function isReplaceableImage(object: FabricObject): object is FabricObject & ReplaceableImage {
+  const candidate = object as unknown as Partial<ReplaceableImage>;
+  return typeof candidate.getSrc === 'function' && typeof candidate.setSrc === 'function';
 }
 
 function describeDocumentId(value: unknown): string | undefined {
@@ -94,6 +119,8 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
   const registry = createObjectRegistry(options.customObjects);
   const events = createEventEmitter<DocumentEngineEvents>();
   const objectsById = new Map<string, FabricObject>();
+  const assetOptions = options.assets ?? {};
+  const uploadedUrls = new Map<string, Promise<string>>();
   let documentInfo = createDocumentInfo(options.document);
   let activeLoad: AbortController | null = null;
   let destroyed = false;
@@ -145,7 +172,11 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
 
   const saving = createSaveController({
     getStorage: () => requireStorage(),
-    createDocument: () => toDocument(),
+    createDocument: async () => {
+      const prepared = await prepareAssetsForSave(toDocument(), assetOptions, uploadedUrls);
+      if (prepared.warnings.length > 0) events.emit('assets:warning', { warnings: prepared.warnings });
+      return prepared.document;
+    },
     retry: options.saveRetry,
     autosave: options.autosave === true ? {} : (options.autosave ?? false),
     onStateChange: (state) => events.emit('save:status', state),
@@ -168,6 +199,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
       revision: saving.state().revision,
       canvas: { width: canvas.getWidth(), height: canvas.getHeight() },
       objects: serialized.objects,
+      assets: buildAssetManifest(serialized.objects),
       metadata: { ...documentInfo.metadata },
     };
     if (serialized.version !== undefined) document.fabricVersion = serialized.version;
@@ -176,12 +208,12 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
   }
 
   function toLoadError(error: unknown, signal: AbortSignal): DocumentEngineError {
-    if (isDocumentEngineError(error)) return error;
     if (signal.aborted) {
       return new DocumentEngineError('LOAD_ABORTED', 'Loading stopped because a newer load started', {
         cause: error,
       });
     }
+    if (isDocumentEngineError(error)) return error;
     const reason = error instanceof Error ? error.message : String(error);
     return new DocumentEngineError('LOAD_FAILED', `Fabric could not load the document: ${reason}`, { cause: error });
   }
@@ -213,7 +245,9 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     events.emit('load:start', { documentId: describeDocumentId(input) });
 
     try {
-      const document = checkDocument(input);
+      const checked = checkDocument(input);
+      const { document, warnings } = await prepareAssetsForLoad(checked, assetOptions, controller.signal);
+      if (controller.signal.aborted) throw new Error('aborted');
       await history.withoutRecording(() =>
         loadIntoCanvas(
           canvas,
@@ -235,7 +269,8 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
       history.reset();
       saving.startSession(document.revision ?? 0);
       canvas.requestRenderAll();
-      events.emit('load:success', { document });
+      if (warnings.length > 0) events.emit('assets:warning', { warnings });
+      events.emit('load:success', { document, warnings });
       return document;
     } catch (error) {
       const engineError = toLoadError(error, controller.signal);
@@ -285,6 +320,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     history.withoutRecording(() => canvas.clear());
     objectsById.clear();
     documentInfo = createDocumentInfo(newOptions);
+    uploadedUrls.clear();
     history.reset();
     saving.startSession(0);
   }
@@ -295,6 +331,34 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     if (indexed !== undefined) return indexed;
     rebuildIndex();
     return objectsById.get(id);
+  }
+
+  function checkAssets(): Promise<AssetReport> {
+    ensureUsable();
+    return inspectAssets(toDocument(), assetOptions, new AbortController().signal);
+  }
+
+  async function replaceImage(oldUrl: string, newUrl: string): Promise<number> {
+    ensureUsable();
+    const images: Array<FabricObject & ReplaceableImage> = [];
+    walkObjects(canvas.getObjects(), (object) => {
+      if (isReplaceableImage(object) && isSameUrl(object.getSrc(), oldUrl)) images.push(object);
+    });
+    if (images.length === 0) return 0;
+
+    await history.transaction('Replace image', () =>
+      Promise.all(
+        images.map(async (image) => {
+          const displayedWidth = image.width * image.scaleX;
+          const displayedHeight = image.height * image.scaleY;
+          await image.setSrc(newUrl, { crossOrigin: image.crossOrigin ?? null });
+          image.set({ scaleX: displayedWidth / image.width, scaleY: displayedHeight / image.height });
+          image.setCoords();
+        }),
+      ),
+    );
+    canvas.requestRenderAll();
+    return images.length;
   }
 
   async function travelThroughHistory(direction: 'undo' | 'redo'): Promise<boolean> {
@@ -343,6 +407,9 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
       registry.register(definition);
     },
     getObjectById,
+    getAssetManifest: () => toDocument().assets ?? { images: [], fonts: [] },
+    checkAssets,
+    replaceImage,
     transaction(label, work) {
       ensureUsable();
       return history.transaction(label, work);

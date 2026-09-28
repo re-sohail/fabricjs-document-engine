@@ -37,7 +37,7 @@ export interface SaveController {
 
 interface SaveControllerOptions {
   getStorage: () => DocumentStorage;
-  createDocument: () => FabricDocument;
+  createDocument: () => FabricDocument | Promise<FabricDocument>;
   retry?: RetryOptions;
   autosave?: AutosaveOptions | false;
   onStateChange: (state: SaveState) => void;
@@ -117,14 +117,15 @@ export function createSaveController(options: SaveControllerOptions): SaveContro
     const sessionAtStart = session;
     const { signal } = sessionAbort;
     const versionAtSnapshot = contentVersion;
-    const document: FabricDocument = { ...options.createDocument(), revision: revision + 1 };
     const expectedRevision = saveOptions.overwrite === true ? null : revision;
+    const creating = options.createDocument();
 
     saving = true;
     lastError = undefined;
     publish();
-    options.onStart(document);
     try {
+      const document: FabricDocument = { ...(await creating), revision: revision + 1 };
+      options.onStart(document);
       const result = await sendWithRetries(storage, document, expectedRevision, signal);
       if (sessionAtStart !== session) return document;
       revision = result?.revision ?? document.revision!;

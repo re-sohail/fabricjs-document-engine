@@ -74,6 +74,12 @@ export function validateDocument(value: unknown): DocumentIssue[] {
   if (value.revision !== undefined && !(Number.isInteger(value.revision) && (value.revision as number) >= 0)) {
     issues.push(invalid('revision', 'must be a whole number of zero or more when present'));
   }
+  if (value.assets !== undefined) {
+    const assets = value.assets;
+    if (!isPlainObject(assets) || !Array.isArray(assets.images) || !Array.isArray(assets.fonts)) {
+      issues.push(invalid('assets', 'must be an object with images and fonts arrays when present'));
+    }
+  }
   if (!isPlainObject(value.metadata)) issues.push(invalid('metadata', 'must be an object'));
 
   if (!isPlainObject(value.canvas)) {

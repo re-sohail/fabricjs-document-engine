@@ -27,3 +27,12 @@ export type { AutosaveOptions } from './save/autosave-scheduler';
 export type { RetryOptions } from './save/retry';
 export { bindUnsavedChangesWarning } from './save/unsaved-changes-warning';
 export type { UnsavedChangesSource } from './save/unsaved-changes-warning';
+export type { AssetManifest, FontAsset, ImageAsset } from './assets/asset-manifest';
+export type {
+  AssetOptions,
+  AssetReport,
+  AssetWarning,
+  AssetWarningCode,
+  UploadRequest,
+} from './assets/asset-pipeline';
+export type { FontLoader } from './assets/font-check';

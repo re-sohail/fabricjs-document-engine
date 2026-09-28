@@ -10,6 +10,7 @@ Fabric already draws objects, handles interaction and serializes to JSON. This p
 - **Custom objects.** Register your own Fabric classes and the extra properties they need to keep.
 - **Safe saving.** It tracks unsaved changes and can autosave. Only one save runs at a time, so a slow older save can never overwrite newer work. Revision checks catch another tab or device saving the same document, and failed saves are retried with backoff.
 - **Your storage.** Plug in any backend with two functions, or use the built-in memory and localStorage adapters. No hosted service is needed.
+- **Assets and fonts.** Documents record the images and fonts they need. When a document is opened, every image and font is checked first. You get the exact list of what is missing, can offer replacements, and tab-only images are uploaded when you save.
 - **Reliable undo and redo.** One user action is one undo step. Transactions group several code changes into one labelled step, and ids survive undo and redo.
 - **Fabric 6 and 7.** Every release is tested against both.
 
@@ -121,6 +122,59 @@ import { bindUnsavedChangesWarning } from 'fabricjs-document-engine';
 const unbind = bindUnsavedChangesWarning(engine);
 ```
 
+## Assets and fonts
+
+Every saved document carries an `assets` manifest that lists each image URL and font variant, together with the ids of the objects that use them. Images embedded as `data:` URLs are left out of the manifest because they need no fetching.
+
+```ts
+const engine = createDocumentEngine({
+  canvas,
+  storage,
+  assets: {
+    resolveUrl: (url) => url.replace('asset://', 'https://cdn.example.com/'),
+    replaceMissingImage: (image) => '/placeholder.png',
+    upload: async ({ blob }) => uploadToYourBucket(blob),
+    loadFont: async ({ family, weight, style }) => {
+      const face = new FontFace(family, `url(/fonts/${family}-${weight}.woff2)`, { weight, style });
+      document.fonts.add(await face.load());
+    },
+    requireFonts: false,
+  },
+});
+
+engine.on('assets:warning', ({ warnings }) => warnings.forEach((warning) => console.warn(warning.message)));
+```
+
+### When a document is opened
+
+1. `resolveUrl` can rewrite each stored URL, for example to sign it or to map asset ids to a CDN.
+2. `loadFont` runs for each font variant. Then the engine checks that the font really renders, rather than silently falling back to a default.
+3. Every image loads in parallel. If any are missing, `replaceMissingImage` can supply a replacement URL for each one. Return `null` to leave it missing.
+4. If images are still missing, loading fails with `MISSING_ASSETS`, and `error.missingAssets` lists each `{ url, objectIds }`. The canvas is not touched.
+
+Fonts that are not available produce a `FONT_UNAVAILABLE` warning and the text uses a fallback font. Set `requireFonts: true` to fail with `MISSING_FONTS` instead. Warnings are also delivered with `load:success` as `{ document, warnings }`.
+
+### When a document is saved
+
+Images that exist only in this tab (`blob:` URLs) and embedded `data:` images are passed to `upload` once, and the document stores the returned URL. Without an `upload` handler, `blob:` images produce an `ASSET_NOT_PORTABLE` warning, because another device cannot open them.
+
+### Cross-origin images
+
+An image from another site without `crossOrigin: 'anonymous'` taints the canvas, and exporting it will fail. The engine warns with `IMAGE_CROSS_ORIGIN` so you can fix it before the user tries to export.
+
+### Checking and replacing at any time
+
+```ts
+const report = await engine.checkAssets();
+report.missingImages;
+report.unavailableFonts;
+report.warnings;
+
+await engine.replaceImage('/old-logo.png', '/new-logo.png');
+```
+
+`replaceImage` swaps every image that uses a URL. Each image keeps its size on the page, and the change is one undo step. `engine.getAssetManifest()` returns the manifest for the current canvas.
+
 ## Custom objects
 
 ```ts
@@ -199,6 +253,10 @@ interface FabricDocument {
   fabricVersion?: string;
   canvas: { width: number; height: number; background?: unknown };
   objects: SerializedFabricObject[];
+  assets?: {
+    images: Array<{ url: string; objectIds: string[] }>;
+    fonts: Array<{ family: string; weight: string; style: string; objectIds: string[] }>;
+  };
   metadata: Record<string, unknown>;
 }
 ```
@@ -221,6 +279,9 @@ Keep project data such as titles, owners and tags in `metadata` with `engine.upd
 | `engine.updateMetadata(changes)` | Merges changes into the document metadata. |
 | `engine.getObjectById(id)` | Finds any object by id, including objects inside groups. |
 | `engine.registerObject({ fabricClass, properties })` | Registers a custom class after the engine is created. |
+| `engine.getAssetManifest()` | Lists the images and fonts used on the canvas. |
+| `engine.checkAssets()` | Resolves to `{ manifest, missingImages, unavailableFonts, warnings }` for the current canvas. |
+| `engine.replaceImage(oldUrl, newUrl)` | Replaces every image with that URL as one undo step. Resolves to the number of images replaced. |
 | `engine.transaction(label, work)` | Runs `work` and records everything it changed as one undo step. Returns what `work` returns. |
 | `engine.commit(label?)` | Records changes made since the last step. Returns `false` when nothing changed. |
 | `engine.undo()` / `engine.redo()` | Resolves to `true` when a step was applied. Calls run one after another. |
@@ -228,7 +289,7 @@ Keep project data such as titles, owners and tags in `metadata` with `engine.upd
 | `engine.getHistory()` | Returns `{ undo, redo }` label lists, newest first. |
 | `engine.clearHistory()` | Forgets all steps. Loading a document or starting a new one also does this. |
 | `bindKeyboardShortcuts(engine, { target? })` | Adds the undo and redo shortcuts. Returns an unbind function. |
-| `engine.on(event, handler)` | Listens to `load:start`, `load:success`, `load:error`, `save:start`, `save:success`, `save:error`, `save:retry`, `save:status`, `history:change` or `history:error`. Returns an unsubscribe function. |
+| `engine.on(event, handler)` | Listens to `load:start`, `load:success`, `load:error`, `save:start`, `save:success`, `save:error`, `save:retry`, `save:status`, `assets:warning`, `history:change` or `history:error`. Returns an unsubscribe function. |
 | `engine.destroy()` | Stops listening to the canvas and cancels a running load. |
 | `validateDocument(value)` | Returns a list of issues with the exact path of each problem. |
 
@@ -243,6 +304,9 @@ Every failure is a `DocumentEngineError` with a `code` you can switch on:
 | `UNKNOWN_OBJECT_TYPE` | A type is not registered. `error.unknownTypes` lists them. |
 | `LOAD_FAILED` | Fabric or your storage could not load the document, for example because an image is missing. `error.cause` holds the original error. |
 | `LOAD_ABORTED` | A newer load started before this one finished. |
+| `MISSING_ASSETS` | Images could not be loaded and had no replacement. `error.missingAssets` lists each `{ url, objectIds }`. |
+| `MISSING_FONTS` | Fonts are not available and `requireFonts` is on. `error.missingFonts` lists them. |
+| `ASSET_UPLOAD_FAILED` | Your `upload` handler failed while saving. |
 | `SAVE_FAILED` | Your storage adapter rejected the save after all retries. `error.retryable` tells you whether trying again could help. |
 | `SAVE_CONFLICT` | Another tab or device saved this document first. |
 | `SAVE_CANCELLED` | A queued save was dropped because another document was opened. |
@@ -256,18 +320,18 @@ A failed load never clears or half-fills your canvas.
 
 ## Roadmap
 
-| Version | Focus |
-| --- | --- |
-| 0.1 ✓ | Document foundation: ids, save and load, validation, custom objects |
-| 0.2 ✓ | Undo and redo with transactions |
-| 0.3 ✓ | Safe saving: dirty state, autosave, stale-response protection |
-| 0.4 | Assets and fonts |
-| 0.5 | Recovery after a refresh or crash |
-| 0.6 | PNG, JPEG, SVG and JSON export with preflight checks |
-| 0.7 | Named versions and schema migrations |
-| 0.8 | React adapter and examples |
-| 0.9 | Hardening and benchmarks |
-| 1.0 | Stable API |
+| Stage | Focus | Released in |
+| --- | --- | --- |
+| 1 | Document foundation: ids, save and load, validation, custom objects | 0.0.0 |
+| 2 | Undo and redo with transactions | 0.1.0 |
+| 3 | Safe saving: dirty state, autosave, stale-response protection | 0.2.0 |
+| 4 | Assets and fonts | 0.3.0 |
+| 5 | Recovery after a refresh or crash | |
+| 6 | PNG, JPEG, SVG and JSON export with preflight checks | |
+| 7 | Named versions and schema migrations | |
+| 8 | React adapter and examples | |
+| 9 | Hardening and benchmarks | |
+| 10 | Stable API | 1.0.0 |
 
 ## License
 
