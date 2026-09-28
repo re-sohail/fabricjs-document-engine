@@ -1,0 +1,23 @@
+{
+  "version": "5.3.0",
+  "background": "#fdf6e3",
+  "objects": [
+    { "type": "rect", "originX": "left", "originY": "top", "left": 40, "top": 40, "width": 120, "height": 80, "fill": "#268bd2", "angle": 0, "scaleX": 1, "scaleY": 1 },
+    { "type": "i-text", "originX": "left", "originY": "top", "left": 200, "top": 60, "text": "Saved by Fabric 5", "fontFamily": "sans-serif", "fontSize": 20, "styles": {} },
+    { "type": "textbox", "originX": "left", "originY": "top", "left": 200, "top": 120, "width": 160, "text": "A wrapping textbox from Fabric 5", "fontFamily": "sans-serif", "styles": {} },
+    {
+      "type": "group",
+      "originX": "left",
+      "originY": "top",
+      "left": 300,
+      "top": 200,
+      "width": 60,
+      "height": 30,
+      "objects": [
+        { "type": "circle", "originX": "left", "originY": "top", "left": -30, "top": -15, "radius": 15, "fill": "#dc322f" },
+        { "type": "rect", "originX": "left", "originY": "top", "left": 0, "top": -15, "width": 30, "height": 30, "fill": "#859900" }
+      ]
+    },
+    { "type": "path", "originX": "left", "originY": "top", "left": 20, "top": 250, "path": [["M", 0, 0], ["L", 50, 25], ["L", 0, 50], ["z"]], "fill": "#6c71c4" }
+  ]
+}

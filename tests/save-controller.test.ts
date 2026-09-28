@@ -68,8 +68,8 @@ async function flushMicrotasks(): Promise<void> {
   for (let round = 0; round < 10; round += 1) await Promise.resolve();
 }
 
-function settle(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 5));
+function untilSaveAttempts(pending: readonly unknown[], count: number): Promise<void> {
+  return vi.waitFor(() => expect(pending).toHaveLength(count), { timeout: 2000, interval: 1 });
 }
 
 describe('save controller', () => {
@@ -116,9 +116,7 @@ describe('save controller', () => {
     await flushMicrotasks();
     pending[0]!.succeed();
     await first;
-    await settle();
-    await flushMicrotasks();
-    expect(pending).toHaveLength(2);
+    await untilSaveAttempts(pending, 2);
     await flushMicrotasks();
     expect(pending[1]!.document.metadata.content).toBe('fourth');
     await flushMicrotasks();
@@ -184,11 +182,9 @@ describe('save controller', () => {
     const saving = controller.save();
     await flushMicrotasks();
     pending[0]!.fail(new Error('network down'));
-    await settle();
-    await flushMicrotasks();
+    await untilSaveAttempts(pending, 2);
     pending[1]!.fail(new Error('still down'));
-    await settle();
-    await flushMicrotasks();
+    await untilSaveAttempts(pending, 3);
     pending[2]!.succeed();
     await saving;
     expect(onRetry).toHaveBeenCalledTimes(2);

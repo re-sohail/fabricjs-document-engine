@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unpkg.com/fabricjs-document-engine/schema/document-v1.schema.json",
+  "title": "Fabric document, schema version 1",
+  "description": "The document format written by fabricjs-document-engine 1.x. Fabric object properties are kept as Fabric serializes them.",
+  "type": "object",
+  "required": ["schemaVersion", "id", "createdAt", "updatedAt", "canvas", "objects", "metadata"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "minLength": 1 },
+    "createdAt": { "type": "string" },
+    "updatedAt": { "type": "string" },
+    "revision": { "type": "integer", "minimum": 0 },
+    "fabricVersion": { "type": "string" },
+    "canvas": {
+      "type": "object",
+      "required": ["width", "height"],
+      "properties": {
+        "width": { "type": "number", "exclusiveMinimum": 0 },
+        "height": { "type": "number", "exclusiveMinimum": 0 },
+        "background": {}
+      }
+    },
+    "objects": { "type": "array", "items": { "$ref": "#/$defs/fabricObject" } },
+    "assets": {
+      "type": "object",
+      "required": ["images", "fonts"],
+      "properties": {
+        "images": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["url", "objectIds"],
+            "properties": {
+              "url": { "type": "string" },
+              "objectIds": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "fonts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["family", "weight", "style", "objectIds"],
+            "properties": {
+              "family": { "type": "string" },
+              "weight": { "type": "string" },
+              "style": { "type": "string" },
+              "objectIds": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+    "metadata": { "type": "object" }
+  },
+  "$defs": {
+    "fabricObject": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "minLength": 1 },
+        "id": { "type": "string" },
+        "objects": { "type": "array", "items": { "$ref": "#/$defs/fabricObject" } },
+        "clipPath": { "$ref": "#/$defs/fabricObject" }
+      }
+    }
+  }
+}

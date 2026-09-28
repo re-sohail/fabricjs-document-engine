@@ -111,14 +111,30 @@ describe(`recovery on Fabric ${fabric.version}`, () => {
     await expect(restoredTab.save()).rejects.toMatchObject({ code: 'SAVE_CONFLICT' });
   });
 
+  it('keeps a copy of unsaved work when the engine is destroyed before autosave runs', async () => {
+    const store = createMemoryRecovery();
+    const storage = createMemoryStorage();
+    const engine = createEngine({ storage, autosave: { delay: 10_000 }, recovery: { store, interval: 10_000 } });
+    engine.canvas.add(new Rect({ width: 10, height: 10 }));
+    await nextTick();
+    const documentId = engine.getDocumentInfo().id;
+    engine.destroy();
+
+    const next = createEngine({ storage, recovery: { store } });
+    const [copy] = await next.getRecoverableDocuments();
+    expect(copy?.documentId).toBe(documentId);
+    expect(copy?.document.objects).toHaveLength(1);
+  });
+
   it('writes checkpoints on its own while editing', async () => {
-    const engine = createEngine({ storage: createMemoryStorage(), recovery: { store: createMemoryRecovery(), interval: 20 } });
+    const engine = createEngine({ storage: createMemoryStorage(), recovery: { store: createMemoryRecovery(), interval: 100 } });
     const checkpoints = vi.fn();
     engine.on('recovery:checkpoint', checkpoints);
     engine.canvas.add(new Rect({ width: 10, height: 10 }));
     await nextTick();
     engine.canvas.add(new Rect({ width: 10, height: 10 }));
-    await nextTick(60);
+    expect(checkpoints).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(checkpoints).toHaveBeenCalled(), { timeout: 3000 });
     expect(checkpoints).toHaveBeenCalledTimes(1);
     expect(checkpoints.mock.calls[0]![0].documentId).toBe(engine.getDocumentInfo().id);
   });

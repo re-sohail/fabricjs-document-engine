@@ -156,6 +156,7 @@ engine.on('save:status', ({ status, isDirty, revision, lastSavedAt, error }) => 
 - **Stale responses.** If another document is loaded while a save is running, that save's response is ignored and any queued save is cancelled with `SAVE_CANCELLED`.
 - **Conflicts.** When another tab or device saved first, the save fails with `SAVE_CONFLICT` and the status becomes `conflict`. Either reload the document with `engine.load(id)`, or keep your version with `engine.save({ overwrite: true })`.
 - **Retries.** Temporary failures are retried with exponential backoff and jitter. Each retry emits `save:retry` with `{ attempt, delay, error }`.
+- **Unsaved work is never replaced silently.** With a storage adapter, `load`, `loadDocument`, `importFabricJson` and `newDocument` refuse with `UNSAVED_CHANGES` while there are unsaved changes. Save first, or pass `{ discardUnsavedChanges: true }` when the user chose to throw the changes away.
 
 ### Warn before leaving
 
@@ -402,99 +403,25 @@ interface FabricDocument {
 
 Keep project data such as titles, owners and tags in `metadata` with `engine.updateMetadata()`, rather than on Fabric objects.
 
-## API
+The format is described by a JSON Schema that ships with the package:
 
-| Member | What it does |
-| --- | --- |
-| `createDocumentEngine({ canvas, storage?, customObjects?, document? })` | Connects the engine to your canvas. |
-| `engine.toDocument()` | Serializes the canvas into the versioned document format. |
-| `engine.loadDocument(document, { restoreCanvasSize? })` | Validates and loads a document. Resolves when the objects are on the canvas. |
-| `engine.load(id)` / `engine.save({ overwrite? })` | Reads from or writes to your storage adapter. |
-| `engine.importFabricJson(json, { id?, metadata? })` | Opens plain Fabric JSON, as text or an object. |
-| `engine.createVersion(name?)` / `engine.listVersions()` | Keeps a named version, or lists versions newest first. |
-| `engine.restoreVersion(id)` / `engine.deleteVersion(id)` | Restores a version as a new unsaved revision, or deletes it. |
-| `engine.isDirty()` | Tells you whether there are unsaved changes. |
-| `engine.getSaveState()` | Returns `{ status, isDirty, isSaving, revision, lastSavedAt, error }`. |
-| `bindUnsavedChangesWarning(engine)` | Asks the browser to confirm before closing a page with unsaved changes. Returns an unbind function. |
-| `engine.newDocument({ id?, metadata? })` | Clears the canvas and starts a fresh document. |
-| `engine.getDocumentInfo()` | Returns the current document's id, dates and metadata. |
-| `engine.updateMetadata(changes)` | Merges changes into the document metadata. |
-| `engine.getObjectById(id)` | Finds any object by id, including objects inside groups. |
-| `engine.registerObject({ fabricClass, properties })` | Registers a custom class after the engine is created. |
-| `engine.getAssetManifest()` | Lists the images and fonts used on the canvas. |
-| `engine.checkAssets()` | Resolves to `{ manifest, missingImages, unavailableFonts, warnings }` for the current canvas. |
-| `engine.replaceImage(oldUrl, newUrl)` | Replaces every image with that URL as one undo step. Resolves to the number of images replaced. |
-| `engine.export(options)` | Exports PNG, JPEG, WebP, SVG or JSON. See [Export](#export). |
-| `engine.preflightExport(options)` | Resolves to `{ ok, problems, warnings }` without exporting. |
-| `downloadExport(result, fileName?)` | Starts a browser download of an export result. |
-| `engine.getRecoverableDocuments()` | Lists recovery copies, newest first. |
-| `engine.restoreRecovery(id?)` / `engine.discardRecovery(id?)` | Loads or deletes a recovery copy. The default is the current document. |
-| `engine.getRecovery(id?)` / `engine.flushRecovery()` | Reads a copy, or writes one now. |
-| `engine.getInterruptedLoad()` | Returns the load that was running when the tab last crashed, if any. |
-| `engine.transaction(label, work)` | Runs `work` and records everything it changed as one undo step. Returns what `work` returns. |
-| `engine.commit(label?)` | Records changes made since the last step. Returns `false` when nothing changed. |
-| `engine.undo()` / `engine.redo()` | Resolves to `true` when a step was applied. Calls run one after another. |
-| `engine.canUndo()` / `engine.canRedo()` | Tells you whether a step is available. |
-| `engine.getHistory()` | Returns `{ undo, redo }` label lists, newest first. |
-| `engine.clearHistory()` | Forgets all steps. Loading a document or starting a new one also does this. |
-| `bindKeyboardShortcuts(engine, { target? })` | Adds the undo and redo shortcuts. Returns an unbind function. |
-| `engine.on(event, handler)` | Listens to `load:start`, `document:change`, `load:success`, `load:error`, `save:start`, `save:success`, `save:error`, `save:retry`, `save:status`, `assets:warning`, `recovery:checkpoint`, `recovery:restored`, `recovery:error`, `export:success`, `export:error`, `version:created`, `version:restored`, `version:error`, `history:change` or `history:error`. Returns an unsubscribe function. |
-| `engine.destroy()` | Stops listening to the canvas and cancels a running load. |
-| `secureDocument(value, limits?)` / `refuseUnsafeImageUrls(objects, isAllowed?)` / `isSafeImageUrl(url)` | The safety checks, exported for server-side validation. |
-| `createDocumentStateStore(engine)` | Framework-free `{ getSnapshot, subscribe, destroy }` state for toolbars. |
-| `validateDocument(value)` | Returns a list of issues with the exact path of each problem. |
+```ts
+import schema from 'fabricjs-document-engine/schema/document-v1.json';
+```
 
-## Errors
+## API reference
 
-Every failure is a `DocumentEngineError` with a `code` you can switch on:
+Every function, option, event and error code is listed in [docs/api.md](https://github.com/re-sohail/fabricjs-document-engine/blob/main/docs/api.md). Every failure is a `DocumentEngineError` with a stable `code` you can switch on, such as `SAVE_CONFLICT`, `MISSING_ASSETS` or `UNSAVED_CHANGES`. A failed load never clears or half-fills your canvas.
 
-| Code | Meaning |
-| --- | --- |
-| `UNSAFE_DOCUMENT` | The document broke a safety rule: an unsafe image address, too many objects, or nesting too deep. `error.issues` lists each one. |
-| `INVALID_DOCUMENT` | The document shape is wrong. `error.issues` lists each path, such as `objects[3].objects[1].type`. |
-| `UNSUPPORTED_SCHEMA` | The document was written by a newer version of this package. |
-| `UNKNOWN_OBJECT_TYPE` | A type is not registered. `error.unknownTypes` lists them. |
-| `LOAD_FAILED` | Fabric or your storage could not load the document, for example because an image is missing. `error.cause` holds the original error. |
-| `LOAD_ABORTED` | A newer load started before this one finished. |
-| `MISSING_ASSETS` | Images could not be loaded and had no replacement. `error.missingAssets` lists each `{ url, objectIds }`. |
-| `MISSING_FONTS` | Fonts are not available and `requireFonts` is on. `error.missingFonts` lists them. |
-| `ASSET_UPLOAD_FAILED` | Your `upload` handler failed while saving. |
-| `SAVE_FAILED` | Your storage adapter rejected the save after all retries. `error.retryable` tells you whether trying again could help. |
-| `SAVE_CONFLICT` | Another tab or device saved this document first. |
-| `SAVE_CANCELLED` | A queued save was dropped because another document was opened. |
-| `DOCUMENT_NOT_FOUND` | The built-in adapters have no document with that id. |
-| `HISTORY_FAILED` | Undo or redo could not rebuild an object, for example because an image is gone. The step is kept and the canvas is unchanged. |
-| `MIGRATION_FAILED` | An older document could not be upgraded. `error.migrationFrom` is the schema version it started from. |
-| `VERSIONS_UNSUPPORTED` | The storage adapter has no version methods. |
-| `VERSION_NOT_FOUND` | There is no version with that id. |
-| `VERSION_FAILED` | An automatic version could not be kept. It is delivered as a `version:error` event. |
-| `EXPORT_BLOCKED` | The preflight found problems. `error.problems` lists each one with the objects involved. |
-| `INVALID_EXPORT_OPTIONS` | The format, scale, quality, area or padding is not valid, or the area is empty. |
-| `EXPORT_ABORTED` | The export was cancelled with its `signal`. |
-| `EXPORT_FAILED` | Fabric could not render the export. `error.cause` holds the original error. |
-| `RECOVERY_MISSING` | A recovery method was called without `recovery: { store }`. |
-| `RECOVERY_NOT_FOUND` | There is no recovery copy for that document. |
-| `RECOVERY_FAILED` | Writing a recovery copy failed, for example because storage is full. It is delivered as a `recovery:error` event and never interrupts editing. |
-| `STORAGE_MISSING` | `load` or `save` was called without a storage adapter. |
-| `INVALID_CUSTOM_OBJECT` | A registered class has no static `type`, or it does not extend a Fabric class. |
-| `ENGINE_DESTROYED` | The engine was used after `destroy()`. |
+## Stability
 
-A failed load never clears or half-fills your canvas.
+Version 1.0 freezes the document format and the adapter contracts:
 
-## Roadmap
+- Documents are validated by the published JSON Schema at `fabricjs-document-engine/schema/document-v1.json`. Every 1.x release reads every document written by earlier releases, as well as plain Fabric JSON from Fabric 5, 6 and 7.
+- Public API names, options, events and error codes do not change within 1.x. New ones may be added.
+- Storage, version and recovery adapters written for 1.0 keep working. `verifyStorageAdapter(storage)` from `fabricjs-document-engine/storage` checks that your adapter follows the save rules.
 
-| Stage | Focus | Released in |
-| --- | --- | --- |
-| 1 | Document foundation: ids, save and load, validation, custom objects | 0.0.0 |
-| 2 | Undo and redo with transactions | 0.1.0 |
-| 3 | Safe saving: dirty state, autosave, stale-response protection | 0.2.0 |
-| 4 | Assets and fonts | 0.3.0 |
-| 5 | Recovery after a refresh or crash | 0.4.0 |
-| 6 | PNG, JPEG, SVG and JSON export with preflight checks | 0.5.0 |
-| 7 | Named versions and schema migrations | 0.6.0 |
-| 8 | React adapter and examples | 0.7.0 |
-| 9 | Hardening and benchmarks | 0.8.0 |
-| 10 | Stable API | 1.0.0 |
+The full promise is in the [compatibility policy](https://github.com/re-sohail/fabricjs-document-engine/blob/main/docs/compatibility-policy.md). Tested browsers, Fabric versions and performance results are in [docs/compatibility.md](https://github.com/re-sohail/fabricjs-document-engine/blob/main/docs/compatibility.md), and a complete setup is in the [production guide](https://github.com/re-sohail/fabricjs-document-engine/blob/main/docs/production.md).
 
 ## Imported content and limits
 

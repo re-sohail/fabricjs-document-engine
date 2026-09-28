@@ -5,6 +5,7 @@ export type {
   DocumentEngineOptions,
   ExportResult,
   ImportOptions,
+  NewDocumentRequest,
   LoadOptions,
 } from './engine/create-document-engine';
 export { DocumentEngineError, createConflictError, isDocumentEngineError } from './engine/errors';

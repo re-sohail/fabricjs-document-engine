@@ -1,5 +1,16 @@
 # fabricjs-document-engine
 
+## 1.0.0
+
+### Major Changes
+
+- 1.0: a stable API and a frozen document format.
+  
+  - **Frozen format.** Schema version 1 is frozen and published as a JSON Schema at `fabricjs-document-engine/schema/document-v1.json`. A reference document written by 1.0 and a Fabric 5 document are part of the test suite, and every future 1.x release must open them unchanged.
+  - **Data-loss guards.** With a storage adapter, `load`, `loadDocument`, `importFabricJson` and `newDocument` now refuse with `UNSAVED_CHANGES` instead of silently replacing unsaved work. Pass `{ discardUnsavedChanges: true }` to replace it on purpose. `destroy()` now writes a recovery copy of unsaved work when recovery is configured.
+  - **Adapter checker.** `verifyStorageAdapter(storage)` checks any storage adapter against the save contract: revision conflicts, overwrite, missing documents and versions.
+  - **Documentation.** The repository gains a complete API reference, kept complete by a test, a compatibility policy that sets out the 1.x promises, and a production setup guide.
+
 ## 0.8.0
 
 ### Minor Changes

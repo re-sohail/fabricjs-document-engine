@@ -56,6 +56,11 @@ export interface DocumentEngineOptions {
 
 export interface LoadOptions {
   restoreCanvasSize?: boolean;
+  discardUnsavedChanges?: boolean;
+}
+
+export interface NewDocumentRequest extends NewDocumentOptions {
+  discardUnsavedChanges?: boolean;
 }
 
 export interface ImportOptions extends LoadOptions {
@@ -100,7 +105,7 @@ export interface DocumentEngine {
   readonly canvas: StaticCanvas;
   getDocumentInfo(): DocumentInfo;
   updateMetadata(changes: Record<string, unknown>): void;
-  newDocument(options?: NewDocumentOptions): void;
+  newDocument(options?: NewDocumentRequest): void;
   toDocument(): FabricDocument;
   loadDocument(document: unknown, options?: LoadOptions): Promise<FabricDocument>;
   load(documentId: string, options?: LoadOptions): Promise<FabricDocument>;
@@ -323,12 +328,21 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     return loadMigratedDocument(input, loadOptions, {});
   }
 
+  function protectUnsavedChanges(discardUnsavedChanges: boolean | undefined): void {
+    if (!storage || discardUnsavedChanges || !saving.state().isDirty) return;
+    throw new DocumentEngineError(
+      'UNSAVED_CHANGES',
+      'The current document has unsaved changes. Save first, or pass { discardUnsavedChanges: true } to replace it anyway.',
+    );
+  }
+
   async function loadMigratedDocument(
     input: unknown,
     loadOptions: LoadOptions,
     importDetails: Pick<MigrationContext, 'id' | 'metadata'>,
   ): Promise<FabricDocument> {
     ensureUsable();
+    protectUnsavedChanges(loadOptions.discardUnsavedChanges);
     activeLoad?.abort();
     const controller = new AbortController();
     activeLoad = controller;
@@ -474,12 +488,15 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
       canvasHeight: canvas.getHeight(),
     });
     const baseRevision = saving.state().revision;
-    const loaded = await loadDocument({
-      ...(migrated as FabricDocument),
-      id: current.id,
-      createdAt: current.createdAt,
-      revision: baseRevision,
-    });
+    const loaded = await loadDocument(
+      {
+        ...(migrated as FabricDocument),
+        id: current.id,
+        createdAt: current.createdAt,
+        revision: baseRevision,
+      },
+      { discardUnsavedChanges: true },
+    );
     noteContentChange();
     events.emit('version:restored', { version: summarize(version), document: loaded });
     return loaded;
@@ -495,6 +512,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
   async function load(documentId: string, loadOptions?: LoadOptions): Promise<FabricDocument> {
     ensureUsable();
     const source = requireStorage();
+    protectUnsavedChanges(loadOptions?.discardUnsavedChanges);
     let stored: unknown;
     try {
       stored = await source.loadDocument(documentId);
@@ -518,8 +536,9 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     return saving.save(saveOptions);
   }
 
-  function newDocument(newOptions?: NewDocumentOptions): void {
+  function newDocument(newOptions: NewDocumentRequest = {}): void {
     ensureUsable();
+    protectUnsavedChanges(newOptions.discardUnsavedChanges);
     activeLoad?.abort();
     history.withoutRecording(() => canvas.clear());
     objectsById.clear();
@@ -700,6 +719,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
 
   function destroy(): void {
     if (destroyed) return;
+    if (recovery && saving.state().isDirty) recovery.writeNow();
     destroyed = true;
     activeLoad?.abort();
     history.destroy();

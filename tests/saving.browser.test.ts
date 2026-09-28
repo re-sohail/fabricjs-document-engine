@@ -3,7 +3,7 @@ import * as fabric from 'fabric';
 import { Canvas, Rect } from 'fabric';
 import { bindUnsavedChangesWarning, createDocumentEngine } from '../src';
 import type { DocumentEngine, DocumentEngineOptions, DocumentStorage, FabricDocument } from '../src';
-import { createMemoryStorage } from '../src/storage';
+import { createLocalStorage, createMemoryStorage, verifyStorageAdapter } from '../src/storage';
 
 const openCanvases: Canvas[] = [];
 const openEngines: DocumentEngine[] = [];
@@ -116,15 +116,21 @@ describe(`safe saving on Fabric ${fabric.version}`, () => {
 
   it('autosaves after edits settle', async () => {
     const storage = createMemoryStorage();
-    const engine = createEngine({ storage, autosave: { delay: 20, maxWait: 200 } });
+    const engine = createEngine({ storage, autosave: { delay: 100, maxWait: 2000 } });
     const saved = vi.fn();
     engine.on('save:success', saved);
     await addRect(engine);
     await addRect(engine);
-    await nextTick(60);
+    expect(saved).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(saved).toHaveBeenCalled(), { timeout: 3000 });
     expect(saved).toHaveBeenCalledTimes(1);
     expect(engine.isDirty()).toBe(false);
     expect(await storage.listDocuments()).toEqual([engine.getDocumentInfo().id]);
+  });
+
+  it('passes the storage contract with the real localStorage adapter', async () => {
+    const report = await verifyStorageAdapter(createLocalStorage({ prefix: `contract-${Date.now()}:` }));
+    expect(report.checks.filter((check) => !check.passed)).toEqual([]);
   });
 
   it('refuses autosave without storage', () => {
@@ -162,11 +168,40 @@ describe(`safe saving on Fabric ${fabric.version}`, () => {
     expect(engine.getSaveState().status).toBe('saved');
   });
 
-  it('starts clean when a new document is created', async () => {
+  it('starts clean when a new document is created, but only after unsaved work is dealt with', async () => {
     const engine = createEngine({ storage: createMemoryStorage() });
     await addRect(engine);
-    engine.newDocument();
+    expect(() => engine.newDocument()).toThrow(expect.objectContaining({ code: 'UNSAVED_CHANGES' }));
+    expect(engine.canvas.getObjects()).toHaveLength(1);
+    engine.newDocument({ discardUnsavedChanges: true });
     expect(engine.getSaveState()).toMatchObject({ isDirty: false, revision: 0 });
+  });
+
+  it('refuses to replace unsaved work when loading, importing or restoring', async () => {
+    const storage = createMemoryStorage();
+    const other = createEngine({ storage });
+    await addRect(other);
+    const saved = await other.save();
+
+    const engine = createEngine({ storage });
+    await addRect(engine);
+    await expect(engine.load(saved.id)).rejects.toMatchObject({ code: 'UNSAVED_CHANGES' });
+    await expect(engine.loadDocument(saved)).rejects.toMatchObject({ code: 'UNSAVED_CHANGES' });
+    await expect(engine.importFabricJson({ objects: [] })).rejects.toMatchObject({ code: 'UNSAVED_CHANGES' });
+    expect(engine.canvas.getObjects()).toHaveLength(1);
+
+    await engine.save();
+    await engine.load(saved.id);
+    expect(engine.getDocumentInfo().id).toBe(saved.id);
+  });
+
+  it('lets apps without storage manage saving themselves', async () => {
+    const engine = createEngine();
+    await addRect(engine);
+    const snapshot = engine.toDocument();
+    await engine.loadDocument(snapshot);
+    engine.newDocument();
+    expect(engine.canvas.getObjects()).toHaveLength(0);
   });
 
   it('warns before leaving the page with unsaved work', async () => {

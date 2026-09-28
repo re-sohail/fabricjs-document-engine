@@ -13,6 +13,7 @@ export type DocumentErrorCode =
   | 'MISSING_FONTS'
   | 'ASSET_UPLOAD_FAILED'
   | 'STORAGE_MISSING'
+  | 'UNSAVED_CHANGES'
   | 'SAVE_FAILED'
   | 'SAVE_CONFLICT'
   | 'SAVE_CANCELLED'

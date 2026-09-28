@@ -23,6 +23,7 @@ export interface InterruptedLoad {
 export interface RecoveryController {
   schedule(): void;
   flush(): Promise<void>;
+  writeNow(): void;
   cancel(): void;
   remove(documentId: string): Promise<void>;
   read(documentId: string): Promise<RecoveryRecord | undefined>;
@@ -205,6 +206,7 @@ export function createRecoveryController(options: RecoveryControllerOptions): Re
       }, interval);
     },
     flush,
+    writeNow: writeCheckpointBeforeThePageCloses,
     cancel,
     remove: (documentId) =>
       enqueue(async () => {
