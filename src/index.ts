@@ -4,6 +4,7 @@ export type {
   DocumentEngineEvents,
   DocumentEngineOptions,
   ExportResult,
+  ImportOptions,
   LoadOptions,
 } from './engine/create-document-engine';
 export { DocumentEngineError, createConflictError, isDocumentEngineError } from './engine/errors';
@@ -49,3 +50,12 @@ export type {
 export type { ExportPreflight, ExportProblem, ExportProblemCode } from './export/preflight-export';
 export { downloadExport } from './export/download-export';
 export type { DownloadableExport } from './export/download-export';
+export { detectSchemaVersion, migrateDocument } from './migrations/migrate-document';
+export type { Migration, MigrationContext, MigrationResult } from './migrations/migrate-document';
+export type {
+  DocumentVersion,
+  VersionKind,
+  VersionOptions,
+  VersionStorage,
+  VersionSummary,
+} from './versions/document-version';

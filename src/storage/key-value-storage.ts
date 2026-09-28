@@ -1,5 +1,7 @@
 import type { FabricDocument } from '../document/document-format';
 import { DocumentEngineError, createConflictError } from '../engine/errors';
+import { newestFirst, summarize } from '../versions/document-version';
+import type { DocumentVersion, VersionStorage, VersionSummary } from '../versions/document-version';
 import type { DocumentStorage } from './storage-contract';
 
 export interface KeyValueStore {
@@ -9,7 +11,7 @@ export interface KeyValueStore {
   keys(): string[];
 }
 
-export interface ManagedDocumentStorage extends DocumentStorage {
+export interface ManagedDocumentStorage extends DocumentStorage, VersionStorage {
   listDocuments(): Promise<string[]>;
   deleteDocument(id: string): Promise<void>;
 }
@@ -21,7 +23,23 @@ function readRevision(json: string | null): number {
 }
 
 export function createKeyValueStorage(store: KeyValueStore, prefix: string): ManagedDocumentStorage {
+  const versionMarker = '::version::';
   const keyFor = (id: string): string => `${prefix}${id}`;
+  const versionPrefixFor = (documentId: string): string => `${keyFor(documentId)}${versionMarker}`;
+  const versionKeyFor = (documentId: string, versionId: string): string => `${versionPrefixFor(documentId)}${versionId}`;
+
+  function readVersion(documentId: string, versionId: string): DocumentVersion {
+    const json = store.read(versionKeyFor(documentId, versionId));
+    if (json === null) {
+      throw new DocumentEngineError('VERSION_NOT_FOUND', `Document "${documentId}" has no version "${versionId}"`);
+    }
+    return JSON.parse(json) as DocumentVersion;
+  }
+
+  function versionKeysOf(documentId: string): string[] {
+    const versionPrefix = versionPrefixFor(documentId);
+    return store.keys().filter((key) => key.startsWith(versionPrefix));
+  }
 
   return {
     async loadDocument(id) {
@@ -41,11 +59,26 @@ export function createKeyValueStorage(store: KeyValueStore, prefix: string): Man
     async listDocuments() {
       return store
         .keys()
-        .filter((key) => key.startsWith(prefix))
+        .filter((key) => key.startsWith(prefix) && !key.includes(versionMarker))
         .map((key) => key.slice(prefix.length));
     },
     async deleteDocument(id) {
+      versionKeysOf(id).forEach((key) => store.remove(key));
       store.remove(keyFor(id));
+    },
+    async saveVersion(version) {
+      store.write(versionKeyFor(version.documentId, version.id), JSON.stringify(version));
+    },
+    async listVersions(documentId): Promise<VersionSummary[]> {
+      return versionKeysOf(documentId)
+        .map((key) => summarize(JSON.parse(store.read(key) ?? 'null') as DocumentVersion))
+        .sort(newestFirst);
+    },
+    async loadVersion(documentId, versionId) {
+      return readVersion(documentId, versionId);
+    },
+    async deleteVersion(documentId, versionId) {
+      store.remove(versionKeyFor(documentId, versionId));
     },
   };
 }

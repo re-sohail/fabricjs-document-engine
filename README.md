@@ -13,6 +13,7 @@ Fabric already draws objects, handles interaction and serializes to JSON. This p
 - **Assets and fonts.** Documents record the images and fonts they need. When a document is opened, every image and font is checked first. You get the exact list of what is missing, can offer replacements, and tab-only images are uploaded when you save.
 - **Recovery.** Unsaved work is copied to IndexedDB while the user edits, and again at the moment the tab is closed or refreshed. After a crash or refresh you can offer to restore it, including images that only existed in the old tab.
 - **Dependable export.** PNG, JPEG, WebP, SVG and editable JSON. You choose the area, scale and background. A preflight check means an export either succeeds or tells you exactly which image or font prevents it.
+- **Versions and migration.** Keep named versions, restore any of them as a new revision, and open plain Fabric JSON or documents saved by older versions of this package.
 - **Reliable undo and redo.** One user action is one undo step. Transactions group several code changes into one labelled step, and ids survive undo and redo.
 - **Fabric 6 and 7.** Every release is tested against both.
 
@@ -218,6 +219,33 @@ const check = await engine.preflightExport({ format: 'png' });
 if (!check.ok) showProblems(check.problems);
 ```
 
+## Versions
+
+```ts
+const version = await engine.createVersion('Sent to client');
+const versions = await engine.listVersions();
+await engine.restoreVersion(version.id);
+await engine.deleteVersion(version.id);
+```
+
+- Versions are full copies of the document, kept in your storage adapter. The built-in adapters support them. A custom adapter adds four methods: `saveVersion(version)`, `listVersions(documentId)`, `loadVersion(documentId, versionId)` and `deleteVersion(documentId, versionId)`.
+- `listVersions` returns summaries, newest first: `{ id, documentId, name, kind, createdAt, revision }`. `kind` is `named` or `auto`.
+- **Restoring never loses work.** The engine first keeps an automatic version named `Before restoring "..."`. It then loads the old content as a new, unsaved revision of the same document. The next save stores it as the newest revision, and history stays linear. To undo a restore, restore the automatic version.
+- **Automatic versions.** Use `versions: { autoEvery: 10, keepAuto: 20 }` to keep a version after every 10 successful saves. Named versions are never pruned. Only the newest `keepAuto` automatic versions are kept, 20 by default.
+- Undo and redo cover recent edits in this session. Versions preserve chosen states for later.
+
+## Migration and importing Fabric JSON
+
+Plain Fabric JSON, such as the output of `canvas.toJSON()` from Fabric 5, 6 or 7, opens directly:
+
+```ts
+await engine.importFabricJson(savedJsonText, { id: 'plan-42', metadata: { source: 'old editor' } });
+```
+
+`loadDocument` and `load(id)` also recognise plain Fabric JSON, so projects stored by an existing Fabric app open without a separate import step. A document loaded with `load(id)` keeps that id, and its next save stores it in the current format.
+
+Every document records its `schemaVersion`. When the package format changes, older documents are upgraded step by step when they are opened. `load:success` reports `migratedFrom` when that happened. A failed step rejects with `MIGRATION_FAILED`, and `error.migrationFrom` names the version it started from. A document from a newer version of the package is refused with `UNSUPPORTED_SCHEMA` rather than being misread. `migrateDocument(value, context)` and `detectSchemaVersion(value)` are exported for tooling such as server-side batch upgrades.
+
 ## Recovery
 
 ```ts
@@ -342,6 +370,9 @@ Keep project data such as titles, owners and tags in `metadata` with `engine.upd
 | `engine.toDocument()` | Serializes the canvas into the versioned document format. |
 | `engine.loadDocument(document, { restoreCanvasSize? })` | Validates and loads a document. Resolves when the objects are on the canvas. |
 | `engine.load(id)` / `engine.save({ overwrite? })` | Reads from or writes to your storage adapter. |
+| `engine.importFabricJson(json, { id?, metadata? })` | Opens plain Fabric JSON, as text or an object. |
+| `engine.createVersion(name?)` / `engine.listVersions()` | Keeps a named version, or lists versions newest first. |
+| `engine.restoreVersion(id)` / `engine.deleteVersion(id)` | Restores a version as a new unsaved revision, or deletes it. |
 | `engine.isDirty()` | Tells you whether there are unsaved changes. |
 | `engine.getSaveState()` | Returns `{ status, isDirty, isSaving, revision, lastSavedAt, error }`. |
 | `bindUnsavedChangesWarning(engine)` | Asks the browser to confirm before closing a page with unsaved changes. Returns an unbind function. |
@@ -367,7 +398,7 @@ Keep project data such as titles, owners and tags in `metadata` with `engine.upd
 | `engine.getHistory()` | Returns `{ undo, redo }` label lists, newest first. |
 | `engine.clearHistory()` | Forgets all steps. Loading a document or starting a new one also does this. |
 | `bindKeyboardShortcuts(engine, { target? })` | Adds the undo and redo shortcuts. Returns an unbind function. |
-| `engine.on(event, handler)` | Listens to `load:start`, `load:success`, `load:error`, `save:start`, `save:success`, `save:error`, `save:retry`, `save:status`, `assets:warning`, `recovery:checkpoint`, `recovery:restored`, `recovery:error`, `export:success`, `export:error`, `history:change` or `history:error`. Returns an unsubscribe function. |
+| `engine.on(event, handler)` | Listens to `load:start`, `load:success`, `load:error`, `save:start`, `save:success`, `save:error`, `save:retry`, `save:status`, `assets:warning`, `recovery:checkpoint`, `recovery:restored`, `recovery:error`, `export:success`, `export:error`, `version:created`, `version:restored`, `version:error`, `history:change` or `history:error`. Returns an unsubscribe function. |
 | `engine.destroy()` | Stops listening to the canvas and cancels a running load. |
 | `validateDocument(value)` | Returns a list of issues with the exact path of each problem. |
 
@@ -390,6 +421,10 @@ Every failure is a `DocumentEngineError` with a `code` you can switch on:
 | `SAVE_CANCELLED` | A queued save was dropped because another document was opened. |
 | `DOCUMENT_NOT_FOUND` | The built-in adapters have no document with that id. |
 | `HISTORY_FAILED` | Undo or redo could not rebuild an object, for example because an image is gone. The step is kept and the canvas is unchanged. |
+| `MIGRATION_FAILED` | An older document could not be upgraded. `error.migrationFrom` is the schema version it started from. |
+| `VERSIONS_UNSUPPORTED` | The storage adapter has no version methods. |
+| `VERSION_NOT_FOUND` | There is no version with that id. |
+| `VERSION_FAILED` | An automatic version could not be kept. It is delivered as a `version:error` event. |
 | `EXPORT_BLOCKED` | The preflight found problems. `error.problems` lists each one with the objects involved. |
 | `INVALID_EXPORT_OPTIONS` | The format, scale, quality, area or padding is not valid, or the area is empty. |
 | `EXPORT_ABORTED` | The export was cancelled with its `signal`. |
@@ -413,7 +448,7 @@ A failed load never clears or half-fills your canvas.
 | 4 | Assets and fonts | 0.3.0 |
 | 5 | Recovery after a refresh or crash | 0.4.0 |
 | 6 | PNG, JPEG, SVG and JSON export with preflight checks | 0.5.0 |
-| 7 | Named versions and schema migrations | |
+| 7 | Named versions and schema migrations | 0.6.0 |
 | 8 | React adapter and examples | |
 | 9 | Hardening and benchmarks | |
 | 10 | Stable API | 1.0.0 |

@@ -23,7 +23,11 @@ import type { CustomObjectDefinition } from '../fabric/object-registry';
 import { collectSerializedTypes, walkObjects } from '../fabric/walk-objects';
 import { createHistory } from '../history/create-history';
 import type { HistoryOptions, HistoryState } from '../history/create-history';
+import { migrateDocument } from '../migrations/migrate-document';
+import type { MigrationContext } from '../migrations/migrate-document';
 import { createRecoveryController, restoreRecordedFiles } from '../recovery/recovery-controller';
+import { summarize, supportsVersions, versionsToPrune } from '../versions/document-version';
+import type { DocumentVersion, VersionKind, VersionOptions, VersionStorage, VersionSummary } from '../versions/document-version';
 import type { InterruptedLoad, RecoveryOptions, RecoveryRecord } from '../recovery/recovery-controller';
 import type { AutosaveOptions } from '../save/autosave-scheduler';
 import type { RetryOptions } from '../save/retry';
@@ -44,10 +48,16 @@ export interface DocumentEngineOptions {
   saveRetry?: RetryOptions;
   assets?: AssetOptions;
   recovery?: RecoveryOptions;
+  versions?: VersionOptions;
 }
 
 export interface LoadOptions {
   restoreCanvasSize?: boolean;
+}
+
+export interface ImportOptions extends LoadOptions {
+  id?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ExportResult {
@@ -62,7 +72,7 @@ export interface ExportResult {
 
 export interface DocumentEngineEvents {
   'load:start': { documentId: string | undefined };
-  'load:success': { document: FabricDocument; warnings: AssetWarning[] };
+  'load:success': { document: FabricDocument; warnings: AssetWarning[]; migratedFrom: number | undefined };
   'assets:warning': { warnings: AssetWarning[] };
   'load:error': { error: DocumentEngineError };
   'save:start': { document: FabricDocument };
@@ -77,6 +87,9 @@ export interface DocumentEngineEvents {
   'recovery:error': { error: DocumentEngineError };
   'export:success': { format: ExportFormat; width: number; height: number; warnings: AssetWarning[] };
   'export:error': { error: DocumentEngineError };
+  'version:created': VersionSummary;
+  'version:restored': { version: VersionSummary; document: FabricDocument };
+  'version:error': { error: DocumentEngineError };
 }
 
 export interface DocumentEngine {
@@ -87,6 +100,11 @@ export interface DocumentEngine {
   toDocument(): FabricDocument;
   loadDocument(document: unknown, options?: LoadOptions): Promise<FabricDocument>;
   load(documentId: string, options?: LoadOptions): Promise<FabricDocument>;
+  importFabricJson(json: string | Record<string, unknown>, options?: ImportOptions): Promise<FabricDocument>;
+  createVersion(name?: string): Promise<VersionSummary>;
+  listVersions(documentId?: string): Promise<VersionSummary[]>;
+  restoreVersion(versionId: string): Promise<FabricDocument>;
+  deleteVersion(versionId: string): Promise<void>;
   save(options?: SaveOptions): Promise<FabricDocument>;
   isDirty(): boolean;
   getSaveState(): SaveState;
@@ -216,6 +234,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     onSuccess: (document) => {
       if (recovery && !saving.state().isDirty) void recovery.remove(document.id);
       events.emit('save:success', { document });
+      createAutomaticVersionAfterSave(document);
     },
     onError: (error) => events.emit('save:error', { error }),
     onRetry: (event) => events.emit('save:retry', event),
@@ -295,7 +314,15 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     return document;
   }
 
-  async function loadDocument(input: unknown, loadOptions: LoadOptions = {}): Promise<FabricDocument> {
+  function loadDocument(input: unknown, loadOptions: LoadOptions = {}): Promise<FabricDocument> {
+    return loadMigratedDocument(input, loadOptions, {});
+  }
+
+  async function loadMigratedDocument(
+    input: unknown,
+    loadOptions: LoadOptions,
+    importDetails: Pick<MigrationContext, 'id' | 'metadata'>,
+  ): Promise<FabricDocument> {
     ensureUsable();
     activeLoad?.abort();
     const controller = new AbortController();
@@ -306,7 +333,12 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     try {
       await recovery?.markLoadStarted(documentId);
       if (controller.signal.aborted) throw new Error('aborted');
-      const checked = checkDocument(input);
+      const { document: migrated, migratedFrom } = migrateDocument(input, {
+        canvasWidth: canvas.getWidth(),
+        canvasHeight: canvas.getHeight(),
+        ...importDetails,
+      });
+      const checked = checkDocument(migrated);
       const { document, warnings } = await prepareAssetsForLoad(checked, assetOptions, controller.signal);
       if (controller.signal.aborted) throw new Error('aborted');
       await history.withoutRecording(() =>
@@ -332,7 +364,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
       saving.startSession(document.revision ?? 0);
       canvas.requestRenderAll();
       if (warnings.length > 0) events.emit('assets:warning', { warnings });
-      events.emit('load:success', { document, warnings });
+      events.emit('load:success', { document, warnings, migratedFrom });
       return document;
     } catch (error) {
       const engineError = toLoadError(error, controller.signal);
@@ -344,6 +376,102 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
         await recovery?.markLoadFinished();
       }
     }
+  }
+
+  function importFabricJson(json: string | Record<string, unknown>, importOptions: ImportOptions = {}): Promise<FabricDocument> {
+    let parsed: unknown = json;
+    if (typeof json === 'string') {
+      try {
+        parsed = JSON.parse(json);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        return Promise.reject(new DocumentEngineError('INVALID_DOCUMENT', `The text is not valid JSON: ${reason}`, { cause: error }));
+      }
+    }
+    const { id, metadata, ...loadOptions } = importOptions;
+    return loadMigratedDocument(parsed, loadOptions, { id, metadata });
+  }
+
+  let savesSinceAutomaticVersion = 0;
+  let lastVersionTime = 0;
+
+  function nextVersionTimestamp(): string {
+    lastVersionTime = Math.max(Date.now(), lastVersionTime + 1);
+    return new Date(lastVersionTime).toISOString();
+  }
+
+  function requireVersions(): VersionStorage {
+    ensureUsable();
+    if (!supportsVersions(storage)) {
+      throw new DocumentEngineError(
+        'VERSIONS_UNSUPPORTED',
+        'The storage adapter needs saveVersion, listVersions, loadVersion and deleteVersion to keep versions',
+      );
+    }
+    return storage;
+  }
+
+  async function pruneAutomaticVersions(versionStorage: VersionStorage, documentId: string): Promise<void> {
+    const keepAuto = options.versions?.keepAuto ?? 20;
+    const existing = await versionStorage.listVersions(documentId);
+    await Promise.all(versionsToPrune(existing, keepAuto).map((version) => versionStorage.deleteVersion(documentId, version.id)));
+  }
+
+  async function storeVersion(name: string, kind: VersionKind, document?: FabricDocument): Promise<VersionSummary> {
+    const versionStorage = requireVersions();
+    const content = document ?? (await prepareAssetsForSave(toDocument(), assetOptions, uploadedUrls)).document;
+    const version: DocumentVersion = {
+      id: createId(),
+      documentId: content.id,
+      name,
+      kind,
+      createdAt: nextVersionTimestamp(),
+      revision: content.revision ?? saving.state().revision,
+      document: content,
+    };
+    await versionStorage.saveVersion(version);
+    await pruneAutomaticVersions(versionStorage, content.id);
+    const summary = summarize(version);
+    events.emit('version:created', summary);
+    return summary;
+  }
+
+  function reportVersionError(error: unknown): void {
+    const reason = error instanceof Error ? error.message : String(error);
+    const engineError = isDocumentEngineError(error)
+      ? error
+      : new DocumentEngineError('VERSION_FAILED', `Could not keep an automatic version: ${reason}`, { cause: error });
+    events.emit('version:error', { error: engineError });
+  }
+
+  function createAutomaticVersionAfterSave(document: FabricDocument): void {
+    const every = options.versions?.autoEvery ?? 0;
+    if (every <= 0 || !supportsVersions(storage)) return;
+    savesSinceAutomaticVersion += 1;
+    if (savesSinceAutomaticVersion < every) return;
+    savesSinceAutomaticVersion = 0;
+    storeVersion(`Autosave ${new Date().toLocaleString()}`, 'auto', document).catch(reportVersionError);
+  }
+
+  async function restoreVersion(versionId: string): Promise<FabricDocument> {
+    const versionStorage = requireVersions();
+    const current = documentInfo;
+    const version = await versionStorage.loadVersion(current.id, versionId);
+    await storeVersion(`Before restoring "${version.name}"`, 'auto');
+    const { document: migrated } = migrateDocument(version.document, {
+      canvasWidth: canvas.getWidth(),
+      canvasHeight: canvas.getHeight(),
+    });
+    const baseRevision = saving.state().revision;
+    const loaded = await loadDocument({
+      ...(migrated as FabricDocument),
+      id: current.id,
+      createdAt: current.createdAt,
+      revision: baseRevision,
+    });
+    noteContentChange();
+    events.emit('version:restored', { version: summarize(version), document: loaded });
+    return loaded;
   }
 
   function requireStorage(): DocumentStorage {
@@ -367,7 +495,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
       events.emit('load:error', { error: engineError });
       throw engineError;
     }
-    return loadDocument(stored, loadOptions);
+    return loadMigratedDocument(stored, loadOptions ?? {}, { id: documentId });
   }
 
   function save(saveOptions?: SaveOptions): Promise<FabricDocument> {
@@ -584,6 +712,11 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     toDocument,
     loadDocument,
     load,
+    importFabricJson,
+    createVersion: (name) => storeVersion(name ?? `Version ${new Date().toLocaleString()}`, 'named'),
+    listVersions: async (documentId) => requireVersions().listVersions(documentId ?? documentInfo.id),
+    restoreVersion,
+    deleteVersion: async (versionId) => requireVersions().deleteVersion(documentInfo.id, versionId),
     save,
     isDirty: () => saving.state().isDirty,
     getSaveState: () => saving.state(),

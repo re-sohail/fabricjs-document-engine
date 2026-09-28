@@ -1,5 +1,11 @@
 # fabricjs-document-engine
 
+## 0.6.0
+
+### Minor Changes
+
+- Versions and migration. Adds `createVersion(name)`, `listVersions()`, `restoreVersion(id)` and `deleteVersion(id)`. Restoring first keeps an automatic `Before restoring "..."` version, then loads the old content as a new unsaved revision of the same document, so nothing is lost and history stays linear. Adds `versions: { autoEvery, keepAuto }` to keep automatic versions every N saves, with retention that keeps every named version and the newest automatic ones. The built-in storage adapters implement the new `VersionStorage` methods, and versions are left out of `listDocuments` and deleted with their document. Adds a step-by-step schema migration chain. Plain Fabric JSON from Fabric 5, 6 or 7 opens through `importFabricJson(json, { id, metadata })`, `loadDocument` or `load(id)`, and a document loaded with `load(id)` keeps its id. Also adds `migratedFrom` on `load:success`, `MIGRATION_FAILED` errors, the exported `migrateDocument` and `detectSchemaVersion`, and the `version:created`, `version:restored` and `version:error` events.
+
 ## 0.5.0
 
 ### Minor Changes

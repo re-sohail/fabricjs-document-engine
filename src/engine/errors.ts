@@ -20,6 +20,10 @@ export type DocumentErrorCode =
   | 'RECOVERY_MISSING'
   | 'RECOVERY_NOT_FOUND'
   | 'RECOVERY_FAILED'
+  | 'MIGRATION_FAILED'
+  | 'VERSIONS_UNSUPPORTED'
+  | 'VERSION_NOT_FOUND'
+  | 'VERSION_FAILED'
   | 'INVALID_EXPORT_OPTIONS'
   | 'EXPORT_BLOCKED'
   | 'EXPORT_FAILED'
@@ -38,6 +42,7 @@ export interface DocumentEngineErrorDetails {
   missingAssets?: ImageAsset[];
   missingFonts?: FontAsset[];
   problems?: ExportProblem[];
+  migrationFrom?: number;
   cause?: unknown;
   retryable?: boolean;
 }
@@ -49,6 +54,7 @@ export class DocumentEngineError extends Error {
   readonly missingAssets: ImageAsset[];
   readonly missingFonts: FontAsset[];
   readonly problems: ExportProblem[];
+  readonly migrationFrom: number | undefined;
   readonly cause: unknown;
   readonly retryable: boolean;
 
@@ -61,6 +67,7 @@ export class DocumentEngineError extends Error {
     this.missingAssets = details.missingAssets ?? [];
     this.missingFonts = details.missingFonts ?? [];
     this.problems = details.problems ?? [];
+    this.migrationFrom = details.migrationFrom;
     this.cause = details.cause;
     this.retryable = details.retryable ?? false;
   }
