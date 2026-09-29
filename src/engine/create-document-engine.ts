@@ -336,16 +336,22 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     );
   }
 
+  function startLoad(): AbortController {
+    activeLoad?.abort();
+    const controller = new AbortController();
+    activeLoad = controller;
+    return controller;
+  }
+
   async function loadMigratedDocument(
     input: unknown,
     loadOptions: LoadOptions,
     importDetails: Pick<MigrationContext, 'id' | 'metadata'>,
+    startedLoad?: AbortController,
   ): Promise<FabricDocument> {
     ensureUsable();
     protectUnsavedChanges(loadOptions.discardUnsavedChanges);
-    activeLoad?.abort();
-    const controller = new AbortController();
-    activeLoad = controller;
+    const controller = startedLoad ?? startLoad();
     const documentId = describeDocumentId(input);
     events.emit('load:start', { documentId });
 
@@ -513,10 +519,20 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     ensureUsable();
     const source = requireStorage();
     protectUnsavedChanges(loadOptions?.discardUnsavedChanges);
+    // Claim the load before reading storage, so a slow response for an older
+    // id cannot replace a newer load that finished first.
+    const controller = startLoad();
     let stored: unknown;
     try {
       stored = await source.loadDocument(documentId);
+      if (controller.signal.aborted) throw new Error('aborted');
     } catch (error) {
+      if (activeLoad === controller) activeLoad = null;
+      if (controller.signal.aborted) {
+        const aborted = toLoadError(error, controller.signal);
+        events.emit('load:error', { error: aborted });
+        throw aborted;
+      }
       const reason = error instanceof Error ? error.message : String(error);
       const engineError = isDocumentEngineError(error)
         ? error
@@ -524,7 +540,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
       events.emit('load:error', { error: engineError });
       throw engineError;
     }
-    return loadMigratedDocument(stored, loadOptions ?? {}, { id: documentId });
+    return loadMigratedDocument(stored, loadOptions ?? {}, { id: documentId }, controller);
   }
 
   function save(saveOptions?: SaveOptions): Promise<FabricDocument> {

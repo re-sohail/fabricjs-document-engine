@@ -212,6 +212,32 @@ describe(`round trip on Fabric ${fabric.version}`, () => {
     expect(engine.canvas.getObjects().map(idOf)).toEqual(quickDocument.objects.map((object) => object.id));
   });
 
+  it('lets the newest load win when storage answers out of order', async () => {
+    const records = new Map<string, FabricDocument>();
+    for (const count of [3, 5]) {
+      const source = createEngine();
+      source.canvas.add(...Array.from({ length: count }, () => new Rect({ width: 10, height: 10 })));
+      const document = source.toDocument();
+      records.set(count === 3 ? 'slow' : 'quick', { ...document, id: count === 3 ? 'slow' : 'quick' });
+    }
+    const storage: DocumentStorage = {
+      loadDocument: async (id) => {
+        await new Promise((resolve) => setTimeout(resolve, id === 'slow' ? 120 : 10));
+        return structuredClone(records.get(id));
+      },
+      saveDocument: async () => undefined,
+    };
+
+    const engine = createEngine(createCanvas(), storage);
+    const olderLoad = engine.load('slow').catch((reason: unknown) => reason);
+    const newerLoad = engine.load('quick');
+    const [olderResult] = await Promise.all([olderLoad, newerLoad]);
+
+    expect(isDocumentEngineError(olderResult) && olderResult.code).toBe('LOAD_ABORTED');
+    expect(engine.getDocumentInfo().id).toBe('quick');
+    expect(engine.canvas.getObjects()).toHaveLength(5);
+  });
+
   it('saves to and loads from a storage adapter', async () => {
     const records = new Map<string, FabricDocument>();
     const storage: DocumentStorage = {
