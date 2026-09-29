@@ -27,10 +27,7 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           cache: npm
 
-      # npm 11.5.1+ is needed for trusted publishing. Pinned to 11 because
-      # npm 12 rejects this lockfile: fabric6 (the Fabric 6 test alias) wants
-      # the optional canvas@2, which npm 11 never records.
-      - run: npm i -g npm@11
+      - run: npm i -g npm@latest
       - run: npm ci
       - run: npm run typecheck
       - run: npm run test:unit
