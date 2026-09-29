@@ -6,6 +6,9 @@ import type { DocumentEngine } from '../src';
 import { createMemoryStorage } from '../src/storage';
 
 const objectCount = 2000;
+// Shared CI runners stall now and then, so each step is timed several times and
+// the median is checked. The budgets themselves stay the same.
+const samples = 5;
 const openCanvases: Canvas[] = [];
 const openEngines: DocumentEngine[] = [];
 
@@ -17,6 +20,17 @@ async function durationOf(work: () => unknown): Promise<number> {
   const started = performance.now();
   await work();
   return performance.now() - started;
+}
+
+// Undo asks Fabric to redraw on the next frame. Wait for it outside the timed
+// part, so Fabric's own rendering is not counted as engine time.
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)]!;
 }
 
 afterEach(async () => {
@@ -41,20 +55,27 @@ describe(`performance budgets with ${objectCount} objects on Fabric ${fabric.ver
     canvas.add(...objects);
     await nextTick();
 
-    const target = objects[objectCount / 2]!;
-    const recordStep = await durationOf(async () => {
-      target.set({ left: target.left + 3 });
-      canvas.fire('object:modified', { target, action: 'drag' } as never);
-      await nextTick();
-    });
-    const undo = await durationOf(() => engine.undo());
-    const save = await durationOf(() => engine.save());
+    const times = { recordStep: [] as number[], undo: [] as number[], save: [] as number[] };
+    for (let sample = 0; sample < samples; sample += 1) {
+      // Undo and redo rebuild objects, so look the target up again each time.
+      const target = engine.getObjectById(engine.toDocument().objects[objectCount / 2]!.id as string)!;
+      times.recordStep.push(
+        await durationOf(async () => {
+          target.set({ left: target.left + 3 });
+          canvas.fire('object:modified', { target, action: 'drag' } as never);
+          await nextTick();
+        }),
+      );
+      times.undo.push(await durationOf(() => engine.undo()));
+      await nextFrame();
+      times.save.push(await durationOf(() => engine.save()));
+    }
     const saved = engine.toDocument();
     const load = await durationOf(() => engine.loadDocument(saved));
 
-    expect(recordStep).toBeLessThan(250);
-    expect(undo).toBeLessThan(250);
-    expect(save).toBeLessThan(250);
+    expect(median(times.recordStep)).toBeLessThan(250);
+    expect(median(times.undo)).toBeLessThan(250);
+    expect(median(times.save)).toBeLessThan(250);
     expect(load).toBeLessThan(3000);
   }, 30_000);
 });
