@@ -126,6 +126,21 @@ describe(`recovery on Fabric ${fabric.version}`, () => {
     expect(copy?.document.objects).toHaveLength(1);
   });
 
+  it('keeps the last checkpoint when the canvas is disposed before the engine', async () => {
+    const store = createMemoryRecovery();
+    const storage = createMemoryStorage();
+    const engine = createEngine({ storage, autosave: { delay: 10_000 }, recovery: { store, interval: 20 } });
+    engine.canvas.add(new Rect({ width: 10, height: 10 }), new Rect({ width: 10, height: 10 }));
+    await nextTick(80);
+    // The order React cleans up a component that creates the canvas first.
+    await engine.canvas.dispose();
+    engine.destroy();
+
+    const next = createEngine({ storage, recovery: { store } });
+    const [copy] = await next.getRecoverableDocuments();
+    expect(copy?.document.objects).toHaveLength(2);
+  });
+
   it('writes checkpoints on its own while editing', async () => {
     const engine = createEngine({ storage: createMemoryStorage(), recovery: { store: createMemoryRecovery(), interval: 100 } });
     const checkpoints = vi.fn();

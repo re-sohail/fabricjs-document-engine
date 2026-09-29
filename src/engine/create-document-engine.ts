@@ -549,6 +549,9 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     } catch (error) {
       return Promise.reject(error);
     }
+    // Objects added in this same task are noted a microtask later. Note them
+    // now, so the save counts them and the document ends up clean.
+    history.flush();
     return saving.save(saveOptions);
   }
 
@@ -735,7 +738,10 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
 
   function destroy(): void {
     if (destroyed) return;
-    if (recovery && saving.state().isDirty) recovery.writeNow();
+    // A disposed Fabric canvas has already dropped its objects. Writing now would
+    // replace the last good checkpoint with an empty page, so keep that one.
+    const { disposed } = canvas as StaticCanvas & { disposed?: boolean };
+    if (recovery && saving.state().isDirty && !disposed) recovery.writeNow();
     destroyed = true;
     activeLoad?.abort();
     history.destroy();
@@ -798,6 +804,8 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     getHistory: () => history.labels(),
     clearHistory() {
       ensureUsable();
+      // Changes made just before still count as unsaved content.
+      history.flush();
       history.reset();
     },
     on: (name, handler) => events.on(name, handler),

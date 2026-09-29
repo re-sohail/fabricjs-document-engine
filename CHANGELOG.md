@@ -1,5 +1,13 @@
 # fabricjs-document-engine
 
+## 1.0.1
+
+### Patch Changes
+
+- cc42940: `load(id)` now claims the load before it reads storage. Before, when storage answered out of order, an older `load` could replace a newer one that had already finished. The older call now rejects with `LOAD_ABORTED`.
+- `destroy()` no longer writes a recovery copy when the Fabric canvas was already disposed. React runs cleanups in hook order, so a component that creates the canvas before the engine disposes it first; the final copy then held an empty page and replaced the last good checkpoint.
+- `save()` and `clearHistory()` now count objects added earlier in the same task. Before, `canvas.add(shape)` followed at once by `save()` left the document marked unsaved, and `clearHistory()` right after an edit dropped the change, so the edit was not treated as unsaved work.
+
 ## 1.0.0
 
 ### Major Changes

@@ -27,6 +27,8 @@ export interface HistoryController {
   labels(): { undo: string[]; redo: string[] };
   withoutRecording<Result>(work: () => Result): Result;
   reset(): void;
+  /** Records changes still waiting for the end of the current task. */
+  flush(): void;
   destroy(): void;
 }
 
@@ -259,6 +261,7 @@ export function createHistory(options: HistoryControllerOptions): HistoryControl
     state,
     labels: () => ({ undo: stack.undoLabels(), redo: stack.redoLabels() }),
     withoutRecording,
+    flush: commitPendingChanges,
     reset() {
       pendingChanges = [];
       stack.clear();

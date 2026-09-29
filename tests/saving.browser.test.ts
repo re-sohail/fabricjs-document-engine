@@ -48,6 +48,24 @@ describe(`safe saving on Fabric ${fabric.version}`, () => {
     expect(engine.getSaveState().status).toBe('unsaved');
   });
 
+  it('counts objects added in the same task as the save', async () => {
+    const engine = createEngine({ storage: createMemoryStorage() });
+    engine.canvas.add(new Rect({ width: 10, height: 10 }), new Rect({ width: 10, height: 10 }));
+    const saved = await engine.save();
+
+    expect(saved.objects).toHaveLength(2);
+    expect(engine.isDirty()).toBe(false);
+  });
+
+  it('keeps changes made just before clearHistory as unsaved', async () => {
+    const engine = createEngine({ storage: createMemoryStorage() });
+    engine.canvas.add(new Rect({ width: 10, height: 10 }));
+    engine.clearHistory();
+
+    expect(engine.isDirty()).toBe(true);
+    expect(engine.canUndo()).toBe(false);
+  });
+
   it('counts revisions and loads the saved revision back', async () => {
     const storage = createMemoryStorage();
     const engine = createEngine({ storage });
