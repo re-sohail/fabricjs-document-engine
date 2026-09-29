@@ -1,31 +1,40 @@
 # fabricjs-document-engine
 
-Turn an existing [Fabric.js](https://fabricjs.com) canvas into a dependable editable document.
+Save, load, undo and redo for an existing [Fabric.js](https://fabricjs.com) canvas. Your objects keep their ids, and a slow save never overwrites newer work.
 
-Fabric already draws objects, handles interaction and serializes to JSON. This package coordinates those pieces into a document workflow you can trust. You keep your own canvas, toolbar and UI.
+[![npm version](https://img.shields.io/npm/v/fabricjs-document-engine.svg)](https://www.npmjs.com/package/fabricjs-document-engine)
+[![bundle size](https://img.shields.io/bundlephobia/minzip/fabricjs-document-engine)](https://bundlephobia.com/package/fabricjs-document-engine)
+[![types](https://img.shields.io/npm/types/fabricjs-document-engine.svg)](https://www.npmjs.com/package/fabricjs-document-engine)
+[![license](https://img.shields.io/npm/l/fabricjs-document-engine.svg)](https://github.com/re-sohail/fabricjs-document-engine/blob/main/LICENSE)
 
-- **Stable object ids.** Every object, including children of groups, gets an id that survives moving, styling, grouping, saving and reopening.
-- **A versioned document format.** It records the schema version, canvas size, background, object order and your own metadata.
-- **Safe loading.** Documents are validated first. Unknown object types are refused before the canvas is touched. A missing image fails the load instead of silently disappearing. When loads overlap, the newest one wins.
-- **Custom objects.** Register your own Fabric classes and the extra properties they need to keep.
-- **Safe saving.** It tracks unsaved changes and can autosave. Only one save runs at a time, so a slow older save can never overwrite newer work. Revision checks catch another tab or device saving the same document, and failed saves are retried with backoff.
-- **Your storage.** Plug in any backend with two functions, or use the built-in memory and localStorage adapters. No hosted service is needed.
-- **Assets and fonts.** Documents record the images and fonts they need. When a document is opened, every image and font is checked first. You get the exact list of what is missing, can offer replacements, and tab-only images are uploaded when you save.
-- **Recovery.** Unsaved work is copied to IndexedDB while the user edits, and again at the moment the tab is closed or refreshed. After a crash or refresh you can offer to restore it, including images that only existed in the old tab.
-- **Dependable export.** PNG, JPEG, WebP, SVG and editable JSON. You choose the area, scale and background. A preflight check means an export either succeeds or tells you exactly which image or font prevents it.
-- **Versions and migration.** Keep named versions, restore any of them as a new revision, and open plain Fabric JSON or documents saved by older versions of this package.
-- **Reliable undo and redo.** One user action is one undo step. Transactions group several code changes into one labelled step, and ids survive undo and redo.
-- **React ready, framework free.** Hooks for React, and a small state store for any other framework. Your toolbar and UI stay yours.
-- **Hardened.** Imported documents are cleaned and size-limited, undo history has a memory budget, and every feature is tested in Chromium, Firefox and WebKit. See the [compatibility and performance results](https://github.com/re-sohail/fabricjs-document-engine/blob/main/docs/compatibility.md).
-- **Fabric 6 and 7.** Every release is tested against both.
+[Documentation](https://fabricjs-document-engine.jscrate.dev) · [Live demos](https://fabricjs-document-engine.jscrate.dev/#examples-heading) · [Editor tutorial](https://fabricjs-document-engine.jscrate.dev/docs/overview/tutorial) · [API](https://github.com/re-sohail/fabricjs-document-engine/blob/main/docs/api.md) · [中文](https://github.com/re-sohail/fabricjs-document-engine/blob/main/README.zh-CN.md)
+
+You keep your own canvas, toolbar and UI. This package sits beside them and turns what is on the canvas into a document you can save, reopen and keep editing. It works with Fabric 6 and 7, in React, Next.js, Vue, Svelte or plain JavaScript.
+
+## Why this exists
+
+Anyone who has shipped a fabricjs editor has hit the same walls. Fabric.js serialization and drawing work well, but a document needs more than that:
+
+- **There is no undo.** Fabric has no built-in history, so every team writes its own and loses object references on the way ([fabric.js#10011](https://github.com/fabricjs/fabric.js/issues/10011)).
+- **Custom properties vanish.** `toJSON` and `loadFromJSON` drop fields Fabric does not know about, unless you list them on every call ([fabric.js#10887](https://github.com/fabricjs/fabric.js/issues/10887)).
+- **Objects cannot be found again.** After loading, you cannot get an object by id, because Fabric gives objects no stable id. Group children have none at all.
+- **Saves race each other.** An older request can finish last and overwrite newer edits, or a second tab can save over the first.
+
+This package handles those four problems and the ones behind them: missing images, fonts that fail to load, crashed tabs and old file formats.
 
 ## Install
+
+Install from npm, together with Fabric:
 
 ```bash
 npm install fabricjs-document-engine fabric
 ```
 
+The package is written in TypeScript and ships its own types. It has no runtime dependencies. `fabric` is a peer dependency, and React is needed only for the hooks.
+
 ## Quick start
+
+Save a Fabric.js canvas as JSON, then load it back:
 
 ```ts
 import { Canvas, Rect } from 'fabric';
@@ -42,7 +51,27 @@ localStorage.setItem(document.id, JSON.stringify(document));
 await engine.loadDocument(JSON.parse(localStorage.getItem(document.id)!));
 ```
 
-## React
+That is the whole setup for a first test. localStorage is fine here; in a real app you pass a storage adapter and let autosave do the work, as shown below. The [quick start guide](https://fabricjs-document-engine.jscrate.dev/docs/overview/quick-start) walks through it step by step.
+
+## What it handles
+
+- **Stable object ids.** Every object, including children of groups, gets an id that survives moving, styling, grouping, saving and reopening. `engine.getObjectById(id)` finds it again.
+- **A versioned document format.** It records the schema version, canvas size, background, object order and your own metadata.
+- **Safe loading.** Documents are validated first. Unknown object types are refused before the canvas is touched. A missing image fails the load instead of silently disappearing. When loads overlap, the newest one wins.
+- **Custom objects.** Register your own Fabric classes and the extra properties they need to keep.
+- **Safe saving.** It tracks unsaved changes and can autosave. Only one save runs at a time, so a slow older save can never overwrite newer work. Revision checks catch another tab or device saving the same document, and failed saves are retried with backoff.
+- **Your storage.** Plug in any backend with two functions, or use the built-in memory and localStorage adapters. No hosted service is needed.
+- **Assets and fonts.** Documents record the images and fonts they need. When a document is opened, every image and font is checked first. You get the exact list of what is missing, can offer replacements, and tab-only images are uploaded when you save.
+- **Recovery.** Unsaved work is copied to IndexedDB while the user edits, and again at the moment the tab is closed or refreshed. After a crash or refresh you can offer to restore it, including images that only existed in the old tab.
+- **Export.** PNG, JPEG, WebP, SVG and editable JSON. You choose the area, scale and background. A preflight check means an export either succeeds or tells you exactly which image or font prevents it.
+- **Versions and migration.** Keep named versions, restore any of them as a new revision, and open plain Fabric JSON or documents saved by older versions of this package.
+- **Undo and redo.** One user action is one undo step. Transactions group several code changes into one labelled step, and ids survive undo and redo.
+- **React ready, framework free.** Hooks for React, and a small state store for any other framework.
+- **Hardened.** Imported documents are cleaned and size-limited, undo history has a memory budget, and every feature is tested in Chromium, Firefox and WebKit.
+
+## React, Next.js, Vue and Svelte
+
+A Fabric.js React example with a toolbar that shows undo and save state:
 
 ```tsx
 import { useDocumentEngine, useDocumentState, DocumentEngineProvider, useEngine } from 'fabricjs-document-engine/react';
@@ -74,11 +103,13 @@ function YourToolbar() {
 - `useDocumentState(engine)` returns `{ documentId, isLoading, loadError, saveStatus, isDirty, isSaving, revision, lastSavedAt, saveError, canUndo, canRedo, undoLabel, redoLabel, assetWarnings }` and re-renders when any of them change.
 - `useDocumentEvent(engine, 'save:error', handler)` subscribes to any event with the latest handler.
 - `DocumentEngineProvider` and `useEngine()` pass the engine to deeply nested toolbars.
-- The React entry is marked `'use client'` for Next.js. React is an optional peer dependency, so the core never imports it.
+- The React entry is marked `'use client'`. For Fabric.js in Next.js, render the editor in a client component loaded with a dynamic import that skips the server, because Fabric needs `window`. React is an optional peer dependency, and the core never imports it.
 
-For other frameworks, `createDocumentStateStore(engine)` gives the same state as `{ getSnapshot, subscribe }`, which fits Svelte stores, Vue's `shallowRef` and similar tools.
+For other frameworks, `createDocumentStateStore(engine)` gives the same state as `{ getSnapshot, subscribe }`. It fits Svelte stores, Vue's `shallowRef` and similar tools.
 
-## Saving and loading through storage
+Framework guides: [React](https://fabricjs-document-engine.jscrate.dev/docs/frameworks/react) · [Next.js](https://fabricjs-document-engine.jscrate.dev/docs/frameworks/next-js) · [Fabric.js with Vue 3](https://fabricjs-document-engine.jscrate.dev/docs/frameworks/vue) (keep the canvas out of deep reactivity with `toRaw`) · [Fabric.js with Svelte](https://fabricjs-document-engine.jscrate.dev/docs/frameworks/svelte) · [Plain JavaScript](https://fabricjs-document-engine.jscrate.dev/docs/frameworks/vanilla-js)
+
+## Save and load from a database or API
 
 The built-in adapters are the quickest way to start:
 
@@ -133,7 +164,9 @@ const storage: DocumentStorage = {
 - Throw an error with `retryable: false` for failures that retrying cannot fix. Every other error is retried.
 - Pass `signal` to `fetch`. The engine aborts it when another document is opened.
 
-## Safe saving
+## Autosave and save conflicts
+
+Fabric.js autosave is one option. The rest of this section is about what happens when saves go wrong, because that is where editors lose work.
 
 ```ts
 const engine = createDocumentEngine({
@@ -166,7 +199,9 @@ import { bindUnsavedChangesWarning } from 'fabricjs-document-engine';
 const unbind = bindUnsavedChangesWarning(engine);
 ```
 
-## Assets and fonts
+Full guides: [autosave](https://fabricjs-document-engine.jscrate.dev/docs/guides/autosave) and [save conflicts](https://fabricjs-document-engine.jscrate.dev/docs/guides/save-conflicts).
+
+## Images, fonts and CORS
 
 Every saved document carries an `assets` manifest that lists each image URL and font variant, together with the ids of the objects that use them. Images embedded as `data:` URLs are left out of the manifest because they need no fetching.
 
@@ -196,7 +231,7 @@ engine.on('assets:warning', ({ warnings }) => warnings.forEach((warning) => cons
 3. Every image loads in parallel. If any are missing, `replaceMissingImage` can supply a replacement URL for each one. Return `null` to leave it missing.
 4. If images are still missing, loading fails with `MISSING_ASSETS`, and `error.missingAssets` lists each `{ url, objectIds }`. The canvas is not touched.
 
-Fonts that are not available produce a `FONT_UNAVAILABLE` warning and the text uses a fallback font. Set `requireFonts: true` to fail with `MISSING_FONTS` instead. Warnings are also delivered with `load:success` as `{ document, warnings }`.
+Fabric.js fonts that are not available produce a `FONT_UNAVAILABLE` warning, and the text uses a fallback font. Set `requireFonts: true` to fail with `MISSING_FONTS` instead. Warnings are also delivered with `load:success` as `{ document, warnings }`.
 
 ### When a document is saved
 
@@ -204,7 +239,7 @@ Images that exist only in this tab (`blob:` URLs) and embedded `data:` images ar
 
 ### Cross-origin images
 
-An image from another site without `crossOrigin: 'anonymous'` taints the canvas, and exporting it will fail. The engine warns with `IMAGE_CROSS_ORIGIN` so you can fix it before the user tries to export.
+A Fabric.js CORS image problem is the most common reason an export fails. An image from another site without `crossOrigin: 'anonymous'` taints the canvas, and exporting it will fail. The engine warns with `IMAGE_CROSS_ORIGIN` so you can fix it before the user tries to export.
 
 ### Checking and replacing at any time
 
@@ -219,7 +254,9 @@ await engine.replaceImage('/old-logo.png', '/new-logo.png');
 
 `replaceImage` swaps every image that uses a URL. Each image keeps its size on the page, and the change is one undo step. `engine.getAssetManifest()` returns the manifest for the current canvas.
 
-## Export
+## Export an image, SVG or JSON
+
+Fabric.js export to PNG, JPEG, WebP or SVG goes through one call. The result is a `Blob` you can download or upload.
 
 ```ts
 import { downloadExport } from 'fabricjs-document-engine';
@@ -244,6 +281,7 @@ downloadExport(result, 'poster.png');
 - A JPEG has no transparency, so an empty or transparent background becomes white instead of black.
 - The export never changes the canvas, the history or the unsaved state.
 - A JSON export is the same portable document a save produces, including uploaded images when `assets.upload` is set.
+- There is no PDF export. Pass the PNG or SVG result to a PDF library if you need one.
 
 ### Preflight and errors
 
@@ -260,7 +298,7 @@ const check = await engine.preflightExport({ format: 'png' });
 if (!check.ok) showProblems(check.problems);
 ```
 
-## Versions
+## Version history
 
 ```ts
 const version = await engine.createVersion('Sent to client');
@@ -275,7 +313,7 @@ await engine.deleteVersion(version.id);
 - **Automatic versions.** Use `versions: { autoEvery: 10, keepAuto: 20 }` to keep a version after every 10 successful saves. Named versions are never pruned. Only the newest `keepAuto` automatic versions are kept, 20 by default.
 - Undo and redo cover recent edits in this session. Versions preserve chosen states for later.
 
-## Migration and importing Fabric JSON
+## Load from JSON and migrate from Fabric 5
 
 Plain Fabric JSON, such as the output of `canvas.toJSON()` from Fabric 5, 6 or 7, opens directly:
 
@@ -285,9 +323,11 @@ await engine.importFabricJson(savedJsonText, { id: 'plan-42', metadata: { source
 
 `loadDocument` and `load(id)` also recognise plain Fabric JSON, so projects stored by an existing Fabric app open without a separate import step. A document loaded with `load(id)` keeps that id, and its next save stores it in the current format.
 
-Every document records its `schemaVersion`. When the package format changes, older documents are upgraded step by step when they are opened. `load:success` reports `migratedFrom` when that happened. A failed step rejects with `MIGRATION_FAILED`, and `error.migrationFrom` names the version it started from. A document from a newer version of the package is refused with `UNSUPPORTED_SCHEMA` rather than being misread. `migrateDocument(value, context)` and `detectSchemaVersion(value)` are exported for tooling such as server-side batch upgrades.
+Every document records its `schemaVersion`, which makes Fabric.js migration a one-way, step-by-step upgrade. When the package format changes, older documents are upgraded when they are opened. `load:success` reports `migratedFrom` when that happened. A failed step rejects with `MIGRATION_FAILED`, and `error.migrationFrom` names the version it started from. A document from a newer version of the package is refused with `UNSUPPORTED_SCHEMA` rather than being misread. `migrateDocument(value, context)` and `detectSchemaVersion(value)` are exported for tooling such as server-side batch upgrades.
 
-## Recovery
+## Recover unsaved work
+
+Fabric.js IndexedDB recovery runs in the background while the user edits:
 
 ```ts
 import { createIndexedDbRecovery } from 'fabricjs-document-engine/recovery';
@@ -315,7 +355,9 @@ if (latest && confirm(`Restore unsaved work from ${new Date(latest.savedAt).toLo
 - `engine.flushRecovery()` writes a copy right now. `engine.getRecovery(id?)` reads one.
 - `createMemoryRecovery()` keeps copies in memory, which is useful for tests. To use your own storage, implement `{ get, set, delete, keys }`, plus an optional synchronous `setNow` for the moment the page closes.
 
-## Custom objects
+## Custom objects and properties
+
+A Fabric.js custom object keeps its extra fields only if something lists them at save time. Register the class once and its properties survive every save, load, undo and redo:
 
 ```ts
 import { Rect } from 'fabric';
@@ -333,7 +375,7 @@ const engine = createDocumentEngine({
 
 If a document contains a type that has not been registered, loading fails with `UNKNOWN_OBJECT_TYPE` and lists the missing types. Your object is never turned into something else.
 
-## Undo and redo
+## Fabric.js undo and redo
 
 History is on by default. The engine records these automatically:
 
@@ -358,7 +400,7 @@ await engine.redo();
 ```
 
 - Transactions can be nested, and the outermost label is used. They can also be async: `await engine.transaction('Import', async () => { ... })`.
-- Grouping and ungrouping are ordinary changes to the object list. Do the remove and the add inside one transaction and they take one undo step.
+- To group objects or ungroup them, do the remove and the add inside one transaction, and they take one undo step. Grouping is an ordinary change to the object list.
 - Undo and redo rebuild the changed objects from their saved state, so they come back as new instances with the same ids. Look them up again with `engine.getObjectById(id)` rather than keeping old references.
 - Keep the last 50 steps with `createDocumentEngine({ canvas, history: { limit: 50 } })`. The default is 100.
 
@@ -380,6 +422,8 @@ engine.on('history:change', ({ canUndo, canRedo, undoLabel, redoLabel }) => {
   undoButton.title = undoLabel ? `Undo ${undoLabel}` : 'Undo';
 });
 ```
+
+The [undo and redo guide](https://fabricjs-document-engine.jscrate.dev/docs/guides/undo-redo) has a live demo and covers text editing in more detail.
 
 ## Document format
 
@@ -409,6 +453,24 @@ The format is described by a JSON Schema that ships with the package:
 import schema from 'fabricjs-document-engine/schema/document-v1.json';
 ```
 
+## Where it fits
+
+Use it when you are building a Fabric.js canvas editor: a design editor, an image editor, a floor planner, a label or certificate builder. Fabric still does the drawing, selection and serialization. This package adds the document layer on top: ids, history, saving, loading, assets, export and recovery.
+
+If you are comparing a canvas editor JS library or an undo redo JavaScript library, note the scope. It does not draw a toolbar, and it does not do real-time collaboration. The [comparison page](https://fabricjs-document-engine.jscrate.dev/docs/overview/comparison) sets it next to `fabric-history`, `fabricjs-react` and hand-written `toJSON`.
+
+## Compatibility
+
+| | Supported |
+| --- | --- |
+| Fabric | Fabric.js 6 and Fabric.js 7 (peer `^6.0.0 \|\| ^7.0.0`); plain JSON from Fabric 5 opens through migration |
+| Browsers | Full suite passes in Chromium, Firefox and WebKit |
+| React | 18 and 19, optional |
+| Node | 18 or later, for server-side import, validation and migration |
+| Modules | ESM and CommonJS, with TypeScript types |
+
+Tested versions and performance numbers (5,000 objects, every step under 50 ms except load) are in [docs/compatibility.md](https://github.com/re-sohail/fabricjs-document-engine/blob/main/docs/compatibility.md).
+
 ## API reference
 
 Every function, option, event and error code is listed in [docs/api.md](https://github.com/re-sohail/fabricjs-document-engine/blob/main/docs/api.md). Every failure is a `DocumentEngineError` with a stable `code` you can switch on, such as `SAVE_CONFLICT`, `MISSING_ASSETS` or `UNSAVED_CHANGES`. A failed load never clears or half-fills your canvas.
@@ -421,7 +483,7 @@ Version 1.0 freezes the document format and the adapter contracts:
 - Public API names, options, events and error codes do not change within 1.x. New ones may be added.
 - Storage, version and recovery adapters written for 1.0 keep working. `verifyStorageAdapter(storage)` from `fabricjs-document-engine/storage` checks that your adapter follows the save rules.
 
-The full promise is in the [compatibility policy](https://github.com/re-sohail/fabricjs-document-engine/blob/main/docs/compatibility-policy.md). Tested browsers, Fabric versions and performance results are in [docs/compatibility.md](https://github.com/re-sohail/fabricjs-document-engine/blob/main/docs/compatibility.md), and a complete setup is in the [production guide](https://github.com/re-sohail/fabricjs-document-engine/blob/main/docs/production.md).
+The full promise is in the [compatibility policy](https://github.com/re-sohail/fabricjs-document-engine/blob/main/docs/compatibility-policy.md). A complete setup is in the [production guide](https://github.com/re-sohail/fabricjs-document-engine/blob/main/docs/production.md).
 
 ## Imported content and limits
 
@@ -449,7 +511,15 @@ Accessibility guidance for your toolbar, status text and dialogs is in [docs/acc
 
 ## Troubleshooting
 
-Common problems and fixes are in [docs/troubleshooting.md](https://github.com/re-sohail/fabricjs-document-engine/blob/main/docs/troubleshooting.md).
+Common problems and fixes are in [docs/troubleshooting.md](https://github.com/re-sohail/fabricjs-document-engine/blob/main/docs/troubleshooting.md). Questions people ask most, such as why `loadFromJSON` loses custom properties, are answered in the [FAQ](https://fabricjs-document-engine.jscrate.dev/docs/overview/faq).
+
+## Help and contributing
+
+- Documentation and live Fabric.js examples: [fabricjs-document-engine.jscrate.dev](https://fabricjs-document-engine.jscrate.dev)
+- Bugs and feature requests: [GitHub issues](https://github.com/re-sohail/fabricjs-document-engine/issues)
+- Release notes: [CHANGELOG.md](https://github.com/re-sohail/fabricjs-document-engine/blob/main/CHANGELOG.md)
+
+Maintained by [Sohail Khan](https://me.jscrate.dev). Pull requests are welcome. Every user-facing change needs a changeset (`npx changeset`).
 
 ## License
 
