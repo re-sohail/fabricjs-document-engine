@@ -1,6 +1,6 @@
 {
   "name": "fabricjs-document-engine",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Fabric.js save and load, undo and redo, and autosave for an existing canvas: stable object ids, custom objects, export, recovery and save-conflict protection.",
   "keywords": [
     "fabricjs",
