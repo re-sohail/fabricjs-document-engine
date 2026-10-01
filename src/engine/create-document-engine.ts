@@ -1,4 +1,4 @@
-import type { FabricObject, StaticCanvas } from 'fabric';
+import type { FabricObject, StaticCanvas, TFiller } from 'fabric';
 import { buildAssetManifest } from '../assets/asset-manifest';
 import type { AssetManifest } from '../assets/asset-manifest';
 import { inspectAssets, prepareAssetsForLoad, prepareAssetsForSave } from '../assets/asset-pipeline';
@@ -10,6 +10,7 @@ import type { ExportFormat, ExportOptions } from '../export/export-options';
 import { preflightExport } from '../export/preflight-export';
 import type { ExportPreflight } from '../export/preflight-export';
 import { mimeTypes, renderRaster, renderSvg, withExportView } from '../export/render-export';
+import type { RenderedSvg } from '../export/render-export';
 import { embedSvgAssets } from '../export/svg/embed-assets';
 import { readSvg } from '../import/svg-import';
 import type { SvgImportOptions, SvgImportResult } from '../import/svg-import';
@@ -20,14 +21,15 @@ import type { NewDocumentOptions } from '../document/create-document';
 import { createId } from '../document/ids';
 import { validateDocument } from '../document/validate-document';
 import { loadIntoCanvas, serializeCanvas } from '../fabric/fabric-adapter';
+import { documentObjects, pickPageFields } from '../fabric/page-state';
 import { readObjectId, writeObjectId } from '../fabric/object-ids';
 import { createObjectRegistry } from '../fabric/object-registry';
 import type { CustomObjectDefinition } from '../fabric/object-registry';
 import { collectSerializedTypes, walkObjects } from '../fabric/walk-objects';
 import { createHistory } from '../history/create-history';
-import type { HistoryOptions, HistoryState } from '../history/create-history';
+import type { HistoryOptions, HistoryState, TransactionOptions } from '../history/create-history';
 import { migrateDocument } from '../migrations/migrate-document';
-import { isSafeImageUrl, secureDocument } from '../security/content-limits';
+import { DEFAULT_MAX_IMAGE_PIXELS, canvasSizeProblem, isSafeImageUrl, secureDocument } from '../security/content-limits';
 import type { ContentLimits } from '../security/content-limits';
 import type { MigrationContext } from '../migrations/migrate-document';
 import { createRecoveryController, restoreRecordedFiles } from '../recovery/recovery-controller';
@@ -78,6 +80,25 @@ export interface LoadProgress {
   stage: LoadStage;
   done: number;
   total: number;
+}
+
+/**
+ * Page settings for `setPage`. Images and the mask are live Fabric objects;
+ * `null` removes one.
+ */
+export interface PageChanges {
+  width?: number;
+  height?: number;
+  background?: string | TFiller | null;
+  backgroundImage?: FabricObject | null;
+  overlay?: string | TFiller | null;
+  overlayImage?: FabricObject | null;
+  clipPath?: FabricObject | null;
+}
+
+export interface RestoreRecoveryOptions extends LoadOptions {
+  /** Restore the copy one session wrote. By default the newest copy of the document is used. */
+  sessionId?: string;
 }
 
 export interface NewDocumentRequest extends NewDocumentOptions {
@@ -141,7 +162,8 @@ export interface DocumentEngine {
   isDirty(): boolean;
   getSaveState(): SaveState;
   registerObject(definition: CustomObjectDefinition): void;
-  transaction<Result>(label: string, work: () => Result): Result;
+  transaction<Result>(label: string, work: () => Result, options?: TransactionOptions): Result;
+  setPage(changes: PageChanges, label?: string): void;
   commit(label?: string): boolean;
   undo(): Promise<boolean>;
   redo(): Promise<boolean>;
@@ -157,9 +179,9 @@ export interface DocumentEngine {
   preflightExport(options: ExportOptions): Promise<ExportPreflight>;
   flushRecovery(): Promise<void>;
   getRecoverableDocuments(): Promise<RecoveryRecord[]>;
-  getRecovery(documentId?: string): Promise<RecoveryRecord | undefined>;
-  restoreRecovery(documentId?: string, options?: LoadOptions): Promise<FabricDocument>;
-  discardRecovery(documentId?: string): Promise<void>;
+  getRecovery(documentId?: string, sessionId?: string): Promise<RecoveryRecord | undefined>;
+  restoreRecovery(documentId?: string, options?: RestoreRecoveryOptions): Promise<FabricDocument>;
+  discardRecovery(documentId?: string, sessionId?: string): Promise<void>;
   getInterruptedLoad(): Promise<InterruptedLoad | undefined>;
   on<Name extends keyof DocumentEngineEvents>(
     name: Name,
@@ -201,11 +223,27 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
   const registry = createObjectRegistry(options.customObjects);
   const events = createEventEmitter<DocumentEngineEvents>();
   const objectsById = new Map<string, FabricObject>();
-  const assetOptions = options.assets ?? {};
+  // The image size limit travels with the asset options to every image check.
+  const assetOptions = {
+    ...options.assets,
+    maxImagePixels: options.limits?.maxImagePixels ?? DEFAULT_MAX_IMAGE_PIXELS,
+  };
   const uploadedUrls = new Map<string, Promise<string>>();
   let documentInfo = createDocumentInfo(options.document);
   let activeLoad: AbortController | null = null;
   let destroyed = false;
+  // Monotonic counters, checked in O(1): every change to the canvas bumps
+  // `mutations`; every switch to another document bumps `session`.
+  let mutations = 0;
+  let session = 0;
+
+  /** Throws when async work started under `startedIn` would now change another document. */
+  function ensureSameSession(startedIn: number, what: string): void {
+    ensureUsable();
+    if (session !== startedIn) {
+      throw new DocumentEngineError('DOCUMENT_CHANGED', `${what} was dropped because another document was opened while it ran`);
+    }
+  }
 
   function ensureUsable(): void {
     if (destroyed) throw new DocumentEngineError('ENGINE_DESTROYED', 'This document engine was destroyed');
@@ -235,22 +273,38 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     canvas.getObjects().forEach(indexObjectTree);
   }
 
-  const handleObjectAdded = ({ target }: ObjectEvent): void => indexObjectTree(target);
-  const handleObjectRemoved = ({ target }: ObjectEvent): void => removeObjectTreeFromIndex(target);
+  const handleObjectAdded = ({ target }: ObjectEvent): void => {
+    mutations += 1;
+    indexObjectTree(target);
+  };
+  const handleObjectRemoved = ({ target }: ObjectEvent): void => {
+    mutations += 1;
+    removeObjectTreeFromIndex(target);
+  };
+  const countMutation = (): void => {
+    mutations += 1;
+  };
   canvas.on('object:added', handleObjectAdded);
   canvas.on('object:removed', handleObjectRemoved);
+  canvas.on('object:modified', countMutation);
+  canvas.on('text:changed' as never, countMutation);
   rebuildIndex();
 
   const history = createHistory({
     canvas,
     limit: options.history?.limit,
     maxBytes: options.history?.maxBytes,
-    serializeObjects: () => {
+    serializeState: () => {
       rebuildIndex();
-      return serializeCanvas(canvas, registry.propertiesToInclude()).objects;
+      const serialized = serializeCanvas(canvas, registry.propertiesToInclude());
+      return {
+        objects: serialized.objects,
+        page: { width: canvas.getWidth(), height: canvas.getHeight(), ...pickPageFields(serialized) },
+      };
     },
     onChange: (state) => events.emit('history:change', state),
     onContentChange: () => noteContentChange(),
+    onLiveChange: () => noteContentChange(),
   });
 
   const saving = createSaveController({
@@ -292,6 +346,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     : undefined;
 
   function noteContentChange(): void {
+    mutations += 1;
     saving.noteContentChange();
     recovery?.schedule();
   }
@@ -309,11 +364,11 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
       revision: saving.state().revision,
       canvas: { width: canvas.getWidth(), height: canvas.getHeight() },
       objects: serialized.objects,
-      assets: buildAssetManifest(serialized.objects),
+      assets: buildAssetManifest(documentObjects({ objects: serialized.objects, canvas: serialized })),
       metadata: { ...documentInfo.metadata },
     };
     if (serialized.version !== undefined) document.fabricVersion = serialized.version;
-    if (serialized.background !== undefined) document.canvas.background = serialized.background;
+    Object.assign(document.canvas, pickPageFields(serialized));
     return document;
   }
 
@@ -338,7 +393,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
       throw new DocumentEngineError(issues[0]!.code, `The document is not valid: ${summary}`, { issues });
     }
     const document = input as FabricDocument;
-    const unknownTypes = registry.findUnknownTypes(collectSerializedTypes(document.objects));
+    const unknownTypes = registry.findUnknownTypes(collectSerializedTypes(documentObjects(document)));
     if (unknownTypes.length > 0) {
       throw new DocumentEngineError(
         'UNKNOWN_OBJECT_TYPE',
@@ -397,6 +452,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     ensureUsable();
     protectUnsavedChanges(loadOptions.discardUnsavedChanges);
     const controller = startedLoad ?? startLoad(loadOptions.signal);
+    const mutationsAtStart = mutations;
     const documentId = describeDocumentId(input);
     const report = (stage: LoadStage, done: number, total: number): void => {
       if (controller.signal.aborted) return;
@@ -429,8 +485,22 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
       await history.withoutRecording(() =>
         loadIntoCanvas(
           canvas,
-          { version: document.fabricVersion, background: document.canvas.background, objects: document.objects },
-          { signal: controller.signal, onObjects: (done, total) => report('objects', done, total) },
+          { version: document.fabricVersion, ...pickPageFields(document.canvas), objects: document.objects },
+          {
+            signal: controller.signal,
+            onObjects: (done, total) => report('objects', done, total),
+            // Compare-and-swap: the canvas is replaced only if nobody edited it
+            // since the load started, unless the caller said to discard edits.
+            beforeSwap: () => {
+              if (mutations !== mutationsAtStart && !loadOptions.discardUnsavedChanges) {
+                throw new DocumentEngineError(
+                  'LOAD_CONFLICT',
+                  'The canvas was edited while the document loaded, so the load was stopped to keep the edits. Pass { discardUnsavedChanges: true } to replace them.',
+                );
+              }
+              session += 1;
+            },
+          },
         ),
       );
       if (controller.signal.aborted) throw new Error('aborted');
@@ -480,10 +550,35 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     return loadMigratedDocument(parsed, loadOptions, { id, metadata });
   }
 
+  function setPage(changes: PageChanges, label = 'Change page'): void {
+    ensureUsable();
+    const problem = canvasSizeProblem(changes.width ?? canvas.getWidth(), changes.height ?? canvas.getHeight(), options.limits);
+    if (problem) throw new DocumentEngineError('UNSAFE_DOCUMENT', `The page was not resized: it would be ${problem}`);
+    history.transaction(label, () => {
+      const width = changes.width ?? canvas.getWidth();
+      const height = changes.height ?? canvas.getHeight();
+      if (width !== canvas.getWidth() || height !== canvas.getHeight()) canvas.setDimensions({ width, height });
+      const live: Record<string, unknown> = {};
+      if (changes.background !== undefined) live.backgroundColor = changes.background ?? '';
+      if (changes.backgroundImage !== undefined) live.backgroundImage = changes.backgroundImage ?? undefined;
+      if (changes.overlay !== undefined) live.overlayColor = changes.overlay ?? '';
+      if (changes.overlayImage !== undefined) live.overlayImage = changes.overlayImage ?? undefined;
+      if (changes.clipPath !== undefined) live.clipPath = changes.clipPath ?? undefined;
+      canvas.set(live as never);
+    });
+    canvas.requestRenderAll();
+  }
+
   async function importSvg(svg: string, importOptions: SvgImportOptions = {}): Promise<SvgImportResult> {
     ensureUsable();
+    const startedIn = session;
     const result = await readSvg(svg, importOptions, options.limits);
-    ensureUsable();
+    try {
+      ensureSameSession(startedIn, 'The SVG import');
+    } catch (error) {
+      result.objects.forEach((object) => object.dispose?.());
+      throw error;
+    }
     if (result.objects.length > 0) {
       history.transaction('Import SVG', () => canvas.add(...result.objects));
       canvas.requestRenderAll();
@@ -630,6 +725,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     protectUnsavedChanges(newOptions.discardUnsavedChanges);
     activeLoad?.abort();
     history.withoutRecording(() => canvas.clear());
+    session += 1;
     objectsById.clear();
     documentInfo = createDocumentInfo(newOptions);
     uploadedUrls.clear();
@@ -659,6 +755,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
       if (isReplaceableImage(object) && isSameUrl(object.getSrc(), oldUrl)) images.push(object);
     });
     if (images.length === 0) return 0;
+    const startedIn = session;
 
     await history.transaction('Replace image', () =>
       Promise.all(
@@ -666,6 +763,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
           const displayedWidth = image.width * image.scaleX;
           const displayedHeight = image.height * image.scaleY;
           await image.setSrc(newUrl, { crossOrigin: image.crossOrigin ?? null });
+          ensureSameSession(startedIn, 'Replacing the image');
           image.set({ scaleX: displayedWidth / image.width, scaleY: displayedHeight / image.height });
           image.setCoords();
         }),
@@ -724,16 +822,35 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
       const warnings = [...check.warnings];
       const rendered = withExportView(canvas, settings.background, format, () => {
         const area = resolveExportArea(canvas, settings.area, settings.padding);
+        // Refuse before the browser is asked for a canvas it cannot make.
+        if (format !== 'svg') {
+          const problem = canvasSizeProblem(area.width * settings.scale, area.height * settings.scale, options.limits);
+          if (problem) {
+            const message = `The export would be ${problem}. Lower the scale or export a smaller area.`;
+            throw new DocumentEngineError('EXPORT_BLOCKED', message, {
+              problems: [{ code: 'TOO_LARGE', message, objectIds: [] }],
+            });
+          }
+        }
         const content =
           format === 'svg'
-            ? Promise.resolve(renderSvg(canvas, area, settings.scale, settings.svg))
+            ? Promise.resolve(renderSvg(canvas, area, settings.scale, settings.svg, options.limits))
             : renderRaster(canvas, area, format, settings.scale, settings.quality);
         return { area, content };
       });
       let blob: Blob;
       if (format === 'svg') {
+        const { svg, rasterizedObjectIds } = (await rendered.content) as RenderedSvg;
+        if (rasterizedObjectIds.length > 0) {
+          warnings.push({
+            code: 'CLIP_PATH_RASTERIZED',
+            message:
+              'Objects whose clip path has a clip path of its own were drawn as pictures: Fabric cannot write nested clip paths as SVG.',
+            objectIds: rasterizedObjectIds,
+          });
+        }
         const embedded = await embedSvgAssets(
-          (await rendered.content) as string,
+          svg,
           canvas,
           settings.svg,
           settings.signal,
@@ -803,12 +920,15 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     return recovery;
   }
 
-  async function restoreRecovery(documentId?: string, loadOptions?: LoadOptions): Promise<FabricDocument> {
+  async function restoreRecovery(documentId?: string, restoreOptions: RestoreRecoveryOptions = {}): Promise<FabricDocument> {
     const source = requireRecovery();
     const id = documentId ?? documentInfo.id;
-    const record = await source.read(id);
+    const { sessionId: branch, ...loadOptions } = restoreOptions;
+    const record = await source.read(id, branch);
     if (!record) throw new DocumentEngineError('RECOVERY_NOT_FOUND', `There is no recovery copy for document "${id}"`);
     const loaded = await loadDocument(await restoreRecordedFiles(record), loadOptions);
+    // The restored copy now lives on in this session; saving covers it.
+    source.adopt(loaded.id, record.sessionId);
     noteContentChange();
     events.emit('recovery:restored', { document: loaded });
     return loaded;
@@ -835,19 +955,22 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     const { disposed } = canvas as StaticCanvas & { disposed?: boolean };
     if (recovery && saving.state().isDirty && !disposed) recovery.writeNow();
     destroyed = true;
+    session += 1;
     activeLoad?.abort();
     history.destroy();
     saving.destroy();
     recovery?.destroy();
     canvas.off('object:added', handleObjectAdded);
     canvas.off('object:removed', handleObjectRemoved);
+    canvas.off('object:modified', countMutation);
+    canvas.off('text:changed' as never, countMutation);
     objectsById.clear();
     events.clear();
   }
 
   return {
     canvas,
-    getDocumentInfo: () => ({ ...documentInfo, metadata: { ...documentInfo.metadata } }),
+    getDocumentInfo: () => ({ ...documentInfo, metadata: { ...documentInfo.metadata }, session }),
     updateMetadata(changes) {
       ensureUsable();
       documentInfo = { ...documentInfo, metadata: { ...documentInfo.metadata, ...changes } };
@@ -878,14 +1001,15 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     preflightExport: checkBeforeExport,
     flushRecovery: async () => requireRecovery().flush(),
     getRecoverableDocuments: async () => requireRecovery().list(),
-    getRecovery: async (documentId) => requireRecovery().read(documentId ?? documentInfo.id),
+    getRecovery: async (documentId, sessionId) => requireRecovery().read(documentId ?? documentInfo.id, sessionId),
     restoreRecovery,
-    discardRecovery: async (documentId) => requireRecovery().remove(documentId ?? documentInfo.id),
+    discardRecovery: async (documentId, sessionId) => requireRecovery().discard(documentId ?? documentInfo.id, sessionId),
     getInterruptedLoad: async () => requireRecovery().interruptedLoad(),
-    transaction(label, work) {
+    transaction(label, work, transactionOptions) {
       ensureUsable();
-      return history.transaction(label, work);
+      return history.transaction(label, work, transactionOptions);
     },
+    setPage,
     commit(label = 'Edit') {
       ensureUsable();
       return history.commit(label);

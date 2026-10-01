@@ -1,3 +1,4 @@
+import { documentObjects } from '../fabric/page-state';
 import type { FabricDocument } from '../document/document-format';
 import { DocumentEngineError, isDocumentEngineError } from '../engine/errors';
 import { buildAssetManifest, isEmbeddedUrl } from './asset-manifest';
@@ -17,7 +18,8 @@ export type AssetWarningCode =
   | 'IMAGE_REPLACED'
   | 'IMAGE_NOT_EMBEDDED'
   | 'FONT_NOT_EMBEDDED'
-  | 'TEXT_ON_PATH_APPROXIMATED';
+  | 'TEXT_ON_PATH_APPROXIMATED'
+  | 'CLIP_PATH_RASTERIZED';
 
 export interface AssetWarning {
   code: AssetWarningCode;
@@ -58,8 +60,8 @@ export interface PreparedDocument {
   warnings: AssetWarning[];
 }
 
-function imageCheckOptions(options: AssetOptions): ImageCheckOptions {
-  return { timeoutMs: options.imageTimeout, concurrency: options.maxConcurrentImages };
+function imageCheckOptions(options: AssetOptions & { maxImagePixels?: number }): ImageCheckOptions {
+  return { timeoutMs: options.imageTimeout, concurrency: options.maxConcurrentImages, maxPixels: options.maxImagePixels };
 }
 
 function cloneDocument(document: FabricDocument): FabricDocument {
@@ -88,7 +90,7 @@ function pointTo(references: readonly ImageReference[], url: string): void {
 }
 
 export async function rewriteUrls(document: FabricDocument, rewrite: (url: string, references: ImageReference[]) => Promise<string>): Promise<void> {
-  const groups = groupByUrl(findImageReferences(document.objects));
+  const groups = groupByUrl(findImageReferences(documentObjects(document)));
   await Promise.all(
     [...groups].map(async ([url, references]) => {
       const next = await rewrite(url, references);
@@ -99,7 +101,7 @@ export async function rewriteUrls(document: FabricDocument, rewrite: (url: strin
 
 function crossOriginWarnings(document: FabricDocument): AssetWarning[] {
   const warnings: AssetWarning[] = [];
-  for (const [url, references] of groupByUrl(findImageReferences(document.objects))) {
+  for (const [url, references] of groupByUrl(findImageReferences(documentObjects(document)))) {
     if (!isCrossOriginUrl(url) || references.every((reference) => reference.crossOrigin)) continue;
     warnings.push({
       code: 'IMAGE_CROSS_ORIGIN',
@@ -126,8 +128,8 @@ export async function inspectAssets(
   signal: AbortSignal,
   onImageProgress?: (done: number, total: number) => void,
 ): Promise<AssetReport> {
-  const manifest = buildAssetManifest(document.objects);
-  const imagesToCheck = findImageReferences(document.objects).filter((reference) => !isEmbeddedUrl(reference.url));
+  const manifest = buildAssetManifest(documentObjects(document));
+  const imagesToCheck = findImageReferences(documentObjects(document)).filter((reference) => !isEmbeddedUrl(reference.url));
   const uniqueImages = [...groupByUrl(imagesToCheck)].map(([url, references]) => ({ url, crossOrigin: references[0]!.crossOrigin }));
 
   const [failures, unavailableFonts] = await Promise.all([
@@ -171,7 +173,7 @@ async function replaceMissingImages(
 
   const stillMissing: ImageAsset[] = [];
   const warnings: AssetWarning[] = [];
-  const groups = groupByUrl(findImageReferences(document.objects));
+  const groups = groupByUrl(findImageReferences(documentObjects(document)));
   for (const image of missingImages) {
     const replacement = replacements.get(image.url);
     if (replacement === undefined || brokenReplacements.has(replacement)) {
@@ -199,7 +201,7 @@ export async function prepareAssetsForLoad(
   const document = cloneDocument(input);
   const { resolveUrl } = options;
   if (resolveUrl) await rewriteUrls(document, async (url) => resolveUrl(url));
-  refuseUnsafeImageUrls(document.objects, isAllowedUrl);
+  refuseUnsafeImageUrls(documentObjects(document), isAllowedUrl);
 
   const report = await inspectAssets(document, options, signal, onImageProgress);
   if (options.requireFonts && report.unavailableFonts.length > 0) {
@@ -264,6 +266,6 @@ export async function prepareAssetsForSave(
     return uploading;
   });
 
-  document.assets = buildAssetManifest(document.objects);
+  document.assets = buildAssetManifest(documentObjects(document));
   return { document, warnings };
 }

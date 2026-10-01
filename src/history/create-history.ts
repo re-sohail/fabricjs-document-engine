@@ -18,9 +18,20 @@ export interface HistoryState {
   redoLabel: string | undefined;
 }
 
+export interface TransactionOptions {
+  /**
+   * When `work` throws or rejects, put the canvas back as it was before the
+   * transaction, record no undo step and leave the document's unsaved state
+   * alone. Applies to the outermost transaction.
+   */
+  rollback?: boolean;
+}
+
 export interface HistoryController {
   commit(label: string): boolean;
-  transaction<Result>(label: string, work: () => Result): Result;
+  transaction<Result>(label: string, work: () => Result, options?: TransactionOptions): Result;
+  /** Resolves once a rollback, undo or redo already started has finished. */
+  settled(): Promise<void>;
   undo(): Promise<boolean>;
   redo(): Promise<boolean>;
   state(): HistoryState;
@@ -32,11 +43,19 @@ export interface HistoryController {
   destroy(): void;
 }
 
+export interface SerializedState {
+  objects: SerializedFabricObject[];
+  /** The page: size, background, overlay and mask. */
+  page: unknown;
+}
+
 interface HistoryControllerOptions extends HistoryOptions {
   canvas: StaticCanvas;
-  serializeObjects: () => SerializedFabricObject[];
+  serializeState: () => SerializedState;
   onChange: (state: HistoryState) => void;
   onContentChange: () => void;
+  /** Called on every keystroke while text is edited, before the step is recorded. */
+  onLiveChange?: () => void;
 }
 
 interface PendingChange {
@@ -81,18 +100,25 @@ export function describePendingChanges(changes: readonly PendingChange[]): strin
 }
 
 export function createHistory(options: HistoryControllerOptions): HistoryController {
-  const { canvas, serializeObjects, onChange, onContentChange } = options;
+  const { canvas, serializeState, onChange, onContentChange, onLiveChange } = options;
+  const takeSnapshot = (): ReturnType<typeof createSnapshot> => {
+    const { objects, page } = serializeState();
+    return createSnapshot(objects, page);
+  };
   const stack = createHistoryStack({
     steps: Math.max(1, options.limit ?? 100),
     bytes: Math.max(0, options.maxBytes ?? 64 * 1024 * 1024),
   });
-  let snapshot = createSnapshot(serializeObjects());
+  let snapshot = takeSnapshot();
   let pendingChanges: PendingChange[] = [];
   let flushScheduled = false;
   let transactionDepth = 0;
   let pausedDepth = 0;
   let applying = false;
   let queue: Promise<unknown> = Promise.resolve();
+  // Goes up on every reset (a new document), so a step that was being
+  // rebuilt for the old document is dropped instead of applied to the new one.
+  let epoch = 0;
 
   function state(): HistoryState {
     const undoLabels = stack.undoLabels();
@@ -107,7 +133,7 @@ export function createHistory(options: HistoryControllerOptions): HistoryControl
 
   function commit(label: string): boolean {
     pendingChanges = [];
-    const nextSnapshot = createSnapshot(serializeObjects());
+    const nextSnapshot = takeSnapshot();
     const difference = diffSnapshots(snapshot, nextSnapshot);
     snapshot = nextSnapshot;
     if (difference === null) return false;
@@ -143,12 +169,18 @@ export function createHistory(options: HistoryControllerOptions): HistoryControl
     notice(verbsByAction[action] ?? 'Transform', event.target);
   };
   const handleTextEdited = ({ target }: ObjectEvent): void => notice('Edit', target);
+  // Each keystroke counts as unsaved work at once; the undo step is still
+  // recorded once, when editing ends.
+  const handleTextChanged = (): void => {
+    if (!applying && pausedDepth === 0) onLiveChange?.();
+  };
 
   const listeners: Array<[string, (event: never) => void]> = [
     ['object:added', handleAdded],
     ['object:removed', handleRemoved],
     ['object:modified', handleModified],
     ['text:editing:exited', handleTextEdited],
+    ['text:changed', handleTextChanged],
   ];
   const eventTarget = canvas as unknown as {
     on(name: string, handler: (event: never) => void): unknown;
@@ -156,18 +188,46 @@ export function createHistory(options: HistoryControllerOptions): HistoryControl
   };
   listeners.forEach(([name, handler]) => eventTarget.on(name, handler));
 
-  function transaction<Result>(label: string, work: () => Result): Result {
+  /**
+   * Puts the canvas back to the last recorded snapshot. The snapshot is the
+   * state before the transaction, so the difference to undo is exactly what
+   * the transaction changed: one serialization, then only the changed
+   * objects are rebuilt.
+   */
+  function rollBack(): Promise<void> {
+    const difference = diffSnapshots(snapshot, takeSnapshot());
+    pendingChanges = [];
+    if (difference === null) return Promise.resolve();
+    applying = true;
+    return runInOrder(async () => {
+      try {
+        await applyStateChange(canvas, difference.before);
+      } finally {
+        applying = false;
+      }
+    });
+  }
+
+  function transaction<Result>(label: string, work: () => Result, transactionOptions: TransactionOptions = {}): Result {
     if (transactionDepth === 0) commitPendingChanges();
+    const outermost = transactionDepth === 0;
     transactionDepth += 1;
     const finish = (): void => {
       transactionDepth -= 1;
       if (transactionDepth === 0) commit(label);
     };
+    const fail = (): Promise<void> | undefined => {
+      transactionDepth -= 1;
+      if (transactionDepth > 0) return undefined;
+      if (outermost && transactionOptions.rollback) return rollBack();
+      commit(label);
+      return undefined;
+    };
     let result: Result;
     try {
       result = work();
     } catch (error) {
-      finish();
+      void fail()?.catch(() => undefined);
       throw error;
     }
     if (!isPromiseLike(result)) {
@@ -179,8 +239,8 @@ export function createHistory(options: HistoryControllerOptions): HistoryControl
         finish();
         return value;
       },
-      (error: unknown) => {
-        finish();
+      async (error: unknown) => {
+        await fail();
         throw error;
       },
     ) as Result;
@@ -221,16 +281,19 @@ export function createHistory(options: HistoryControllerOptions): HistoryControl
       commitPendingChanges();
       const step = takeStep();
       if (step === undefined) return false;
+      const startedIn = epoch;
       applying = true;
+      let applied: boolean;
       try {
-        await applyStateChange(canvas, pickChange(step));
+        applied = await applyStateChange(canvas, pickChange(step), () => epoch !== startedIn);
       } catch (error) {
-        putBack(step);
+        if (epoch === startedIn) putBack(step);
         throw error;
       } finally {
         applying = false;
       }
-      snapshot = createSnapshot(serializeObjects());
+      if (!applied) return false;
+      snapshot = takeSnapshot();
       moveTo(step);
       onContentChange();
       onChange(state());
@@ -244,6 +307,7 @@ export function createHistory(options: HistoryControllerOptions): HistoryControl
       return commit(label);
     },
     transaction,
+    settled: () => queue.then(() => undefined),
     undo: () =>
       travel(
         () => stack.takeUndo(),
@@ -265,7 +329,8 @@ export function createHistory(options: HistoryControllerOptions): HistoryControl
     reset() {
       pendingChanges = [];
       stack.clear();
-      snapshot = createSnapshot(serializeObjects());
+      epoch += 1;
+      snapshot = takeSnapshot();
       onChange(state());
     },
     destroy() {

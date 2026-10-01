@@ -93,6 +93,10 @@ Measured on an Apple Silicon Mac with headless Playwright browsers, with the can
 - Loading creates objects 100 at a time and gives the page a turn between chunks. Images are checked six at a time, each for at most 30 seconds.
 - `renderDocuments` keeps `concurrency` off-screen canvases (2) and frees each document's objects, Fabric cache canvases and export canvases after it.
 
+## Size limits
+
+Every page, raster export and decoded image is checked against `limits` before a canvas is created: 16,384 pixels per side and 67,108,864 pixels in all by default. That is the area iOS 18 Safari can draw (older iOS: 16,777,216; Chrome: 268,435,456; Firefox: 472,907,776). PDF pages and pictures in a PDF are drawn at a lower resolution instead of failing.
+
 ## Fabric behaviour the engine works around
 
 These were reproduced on Fabric 6.9.1 and 7.4.0, and the tests guard each workaround. If a later Fabric release fixes one, the workaround can be removed.
@@ -111,3 +115,6 @@ These were reproduced on Fabric 6.9.1 and 7.4.0, and the tests guard each workar
 | `util.groupSVGElements` moves SVG artwork when elements lie outside the viewBox | [#10916](https://github.com/fabricjs/fabric.js/issues/10916) | `importSvg` keeps the SVG's viewport. |
 | No PDF export | [#5906](https://github.com/fabricjs/fabric.js/issues/5906) | `fabricjs-document-engine/pdf`. |
 | `dispose()` does not free canvas memory in browsers | [#4848](https://github.com/fabricjs/fabric.js/issues/4848) | `renderDocuments` and exports release canvas pixels themselves. |
+| Inverted clip paths are written to SVG as ordinary clip paths | [#10460](https://github.com/fabricjs/fabric.js/issues/10460) | SVG export writes them as masks. |
+| A clip path with its own clip path makes `toSVG()` throw (Fabric 7) or write `url(#undefined)` (Fabric 6) | [#10460](https://github.com/fabricjs/fabric.js/issues/10460) | The object is drawn as a picture, with `CLIP_PATH_RASTERIZED`. |
+| Overlines and other decorations of ordinary text land away from the canvas in SVG; Fabric 6 shifts raised letters twice | [#10645](https://github.com/fabricjs/fabric.js/issues/10645) | SVG export draws decorations as shapes where the canvas does. |

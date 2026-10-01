@@ -2,7 +2,7 @@ import type { FabricObject, StaticCanvas } from 'fabric';
 import type { AssetWarning } from '../../assets/asset-pipeline';
 import { readObjectId } from '../../fabric/object-ids';
 import { childrenOf } from '../../fabric/walk-objects';
-import { isSafeImageUrl } from '../../security/content-limits';
+import { DEFAULT_MAX_IMAGE_PIXELS, isSafeImageUrl } from '../../security/content-limits';
 import type { FontSource, NormalizedSvgOptions } from '../export-options';
 
 /**
@@ -101,6 +101,9 @@ function imagesOnCanvas(canvas: StaticCanvas): Map<string, { element: HTMLImageE
 }
 
 function drawToDataUrl(element: HTMLImageElement): string {
+  if (element.naturalWidth * element.naturalHeight > DEFAULT_MAX_IMAGE_PIXELS) {
+    throw new Error('the picture is too large to copy');
+  }
   const canvas = document.createElement('canvas');
   canvas.width = element.naturalWidth;
   canvas.height = element.naturalHeight;

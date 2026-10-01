@@ -7,6 +7,34 @@ export interface ContentLimits {
   maxObjects?: number;
   maxDepth?: number;
   isAllowedUrl?: (url: string) => boolean;
+  /** Longest side of the page or of an export, in pixels. Default 16,384. */
+  maxCanvasSide?: number;
+  /** Largest page or export area, in pixels. Default 67,108,864 (8,192 × 8,192, what iOS 18 Safari can draw). */
+  maxCanvasPixels?: number;
+  /** Largest decoded image, in pixels. Default 67,108,864. */
+  maxImagePixels?: number;
+  /** Longest document, in characters of JSON. Default 100,000,000. */
+  maxDocumentLength?: number;
+}
+
+export const DEFAULT_MAX_CANVAS_SIDE = 16_384;
+export const DEFAULT_MAX_CANVAS_PIXELS = 67_108_864;
+export const DEFAULT_MAX_IMAGE_PIXELS = 67_108_864;
+export const DEFAULT_MAX_DOCUMENT_LENGTH = 100_000_000;
+
+/**
+ * Why a drawing surface of this size is refused, or undefined when it fits.
+ * Pure arithmetic, run before any canvas is created: a canvas over the
+ * browser's limit fails silently or crashes the tab.
+ */
+export function canvasSizeProblem(width: number, height: number, limits: ContentLimits = {}): string | undefined {
+  const maxSide = limits.maxCanvasSide ?? DEFAULT_MAX_CANVAS_SIDE;
+  const maxPixels = limits.maxCanvasPixels ?? DEFAULT_MAX_CANVAS_PIXELS;
+  const w = Math.ceil(width);
+  const h = Math.ceil(height);
+  if (w > maxSide || h > maxSide) return `${w} × ${h} pixels is larger than the ${maxSide}-pixel limit per side`;
+  if (w * h > maxPixels) return `${w} × ${h} pixels is ${w * h} pixels, more than the limit of ${maxPixels}`;
+  return undefined;
 }
 
 const dangerousKeys = new Set(['__proto__', 'constructor', 'prototype']);
@@ -20,8 +48,15 @@ export function isSafeImageUrl(url: string): boolean {
   return false;
 }
 
-function withoutDangerousKeys(value: unknown): unknown {
-  return JSON.parse(JSON.stringify(value), (key, nested: unknown) => (dangerousKeys.has(key) ? undefined : nested));
+function withoutDangerousKeys(json: string): unknown {
+  return JSON.parse(json, (key, nested: unknown) => (dangerousKeys.has(key) ? undefined : nested));
+}
+
+function pageSize(document: Record<string, unknown>): { width: unknown; height: unknown } {
+  const canvas = document.canvas as Record<string, unknown> | undefined;
+  return typeof canvas === 'object' && canvas !== null
+    ? { width: canvas.width, height: canvas.height }
+    : { width: document.width, height: document.height };
 }
 
 function deepestNesting(value: unknown): number {
@@ -57,8 +92,21 @@ export function secureDocument(input: unknown, limits: ContentLimits = {}): unkn
   const maxDepth = limits.maxDepth ?? 100;
   const maxObjects = limits.maxObjects ?? 50_000;
 
-  const document = withoutDangerousKeys(input) as { objects?: unknown };
+  // The JSON text is needed to strip dangerous keys anyway, so its length
+  // costs nothing extra.
+  const json = JSON.stringify(input);
+  const maxLength = limits.maxDocumentLength ?? DEFAULT_MAX_DOCUMENT_LENGTH;
+  if (json.length > maxLength) {
+    refuseWhenUnsafe([unsafe('', `the document is ${json.length} characters of JSON, the limit is ${maxLength}`)]);
+  }
+  const document = withoutDangerousKeys(json) as { objects?: unknown } & Record<string, unknown>;
   const issues: DocumentIssue[] = [];
+
+  const { width, height } = pageSize(document);
+  if (typeof width === 'number' && typeof height === 'number') {
+    const problem = canvasSizeProblem(width, height, limits);
+    if (problem) issues.push(unsafe('canvas', `the page is ${problem}`));
+  }
 
   const depth = deepestNesting(document);
   if (depth > maxDepth) issues.push(unsafe('', `the document is nested ${depth} levels deep, the limit is ${maxDepth}`));

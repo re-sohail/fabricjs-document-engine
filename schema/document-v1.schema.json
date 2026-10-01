@@ -18,7 +18,11 @@
       "properties": {
         "width": { "type": "number", "exclusiveMinimum": 0 },
         "height": { "type": "number", "exclusiveMinimum": 0 },
-        "background": {}
+        "background": {},
+        "backgroundImage": { "$ref": "#/$defs/fabricObject" },
+        "overlay": {},
+        "overlayImage": { "$ref": "#/$defs/fabricObject" },
+        "clipPath": { "$ref": "#/$defs/fabricObject" }
       }
     },
     "objects": { "type": "array", "items": { "$ref": "#/$defs/fabricObject" } },

@@ -15,9 +15,18 @@ export interface SnapshotDifference {
   after: StateChange;
 }
 
-export function createSnapshot(objects: readonly SerializedFabricObject[]): CanvasSnapshot {
+/**
+ * The page itself (size, background, overlay, mask) is one more entry in the
+ * same map under this reserved key. It never appears in `order`, so the
+ * diff stays proportional to what changed and object ordering is unaffected.
+ * Object ids come from `createId`, which never produces this value.
+ */
+export const PAGE_KEY = '__page__';
+
+export function createSnapshot(objects: readonly SerializedFabricObject[], page?: unknown): CanvasSnapshot {
   const objectsById = new Map<string, string>();
   const order: string[] = [];
+  if (page !== undefined) objectsById.set(PAGE_KEY, JSON.stringify(page));
   for (const object of objects) {
     const id = object.id ?? '';
     objectsById.set(id, JSON.stringify(object));

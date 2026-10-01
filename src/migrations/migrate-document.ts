@@ -1,3 +1,4 @@
+import { pickPageFields } from '../fabric/page-state';
 import { CURRENT_SCHEMA_VERSION } from '../document/document-format';
 import { createId } from '../document/ids';
 import { DocumentEngineError } from '../engine/errors';
@@ -35,7 +36,7 @@ function fromFabricJson(json: Record<string, unknown>, context: MigrationContext
     canvas: {
       width: positiveNumberOr(json.width, context.canvasWidth),
       height: positiveNumberOr(json.height, context.canvasHeight),
-      ...(json.background === undefined ? {} : { background: json.background }),
+      ...pickPageFields(json),
     },
     objects: json.objects,
     metadata: { ...context.metadata },

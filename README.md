@@ -593,6 +593,36 @@ getLayers(engine); // [{ id, type, name, index, visible, locked }], top first
 
 The engine saves each object's `name`, so a layers panel keeps its labels. In React, `useLayers(engine)` from `fabricjs-document-engine/react` returns the same list and updates on every change.
 
+## Edits that are never lost
+
+These guarantees hold however the user and your code interleave work:
+
+```ts
+// Page settings are one undo step and count as unsaved work
+engine.setPage({ width: 1080, height: 1080, background: '#fff8e7' }, 'Square post');
+
+// All or nothing: a failure leaves the canvas as it was
+await engine.transaction('Apply template', async () => {
+  await addTemplateObjects(engine.canvas);
+}, { rollback: true });
+
+// A load refuses to overwrite edits made while it ran
+try {
+  await engine.load('poster-42');
+} catch (error) {
+  if (isDocumentEngineError(error) && error.code === 'LOAD_CONFLICT') askBeforeReplacing();
+}
+```
+
+- **The whole page is saved.** Background images, overlays and a mask on the canvas (`canvas.backgroundImage`, `overlayImage`, `clipPath`) are saved, reopened, checked for missing images and kept in versions and recovery copies.
+- **Page changes are undoable.** `setPage` changes the size, background, overlay or mask as one undo step, and changes made to the canvas inside a `transaction` count too.
+- **Typing counts at once.** Each keystroke marks the document unsaved and feeds autosave and recovery, while the whole edit stays one undo step.
+- **Loads keep edits.** If the canvas is edited while a document loads, the load stops with `LOAD_CONFLICT` and the edits stay, unless you pass `discardUnsavedChanges: true`.
+- **Async work stays in its document.** An SVG import, image replacement or paste that finishes after another document was opened is dropped with `DOCUMENT_CHANGED`, instead of landing in the wrong document.
+- **Each tab has its own recovery copy.** Two tabs editing the same document no longer overwrite each other's copy, and a save removes only the copy it covers.
+- **Sizes are checked before drawing.** Pages, exports and images over the browser's canvas limits are refused before any canvas is made, so a huge file cannot crash the tab. Limits are set with `limits`.
+- **Rollback when you want it.** `transaction(label, work, { rollback: true })` undoes everything `work` changed when it fails.
+
 ## Document format
 
 ```ts
@@ -603,7 +633,15 @@ interface FabricDocument {
   updatedAt: string;
   revision?: number;
   fabricVersion?: string;
-  canvas: { width: number; height: number; background?: unknown };
+  canvas: {
+    width: number;
+    height: number;
+    background?: unknown;       // color, gradient or pattern
+    backgroundImage?: object;   // Fabric image behind every object
+    overlay?: unknown;          // color drawn over every object
+    overlayImage?: object;      // Fabric image over every object
+    clipPath?: object;          // mask for the whole canvas
+  };
   objects: SerializedFabricObject[];
   assets?: {
     images: Array<{ url: string; objectIds: string[] }>;

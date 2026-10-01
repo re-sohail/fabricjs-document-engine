@@ -9,7 +9,7 @@ import type { ExportFormat, NormalizedSvgOptions } from './export-options';
 import { isRasterFormat } from './export-options';
 import { findTextOnPath } from './svg/text-on-path';
 
-export type ExportProblemCode = 'MISSING_IMAGE' | 'CROSS_ORIGIN_IMAGE' | 'MISSING_FONT' | 'IMAGE_NOT_EMBEDDED';
+export type ExportProblemCode = 'MISSING_IMAGE' | 'CROSS_ORIGIN_IMAGE' | 'MISSING_FONT' | 'IMAGE_NOT_EMBEDDED' | 'TOO_LARGE';
 
 export interface ExportProblem {
   code: ExportProblemCode;

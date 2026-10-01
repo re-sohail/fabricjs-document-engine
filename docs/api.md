@@ -37,7 +37,21 @@ Connects the engine to an existing Fabric canvas. The canvas stays yours. The en
 | `assets` | `AssetOptions` | `{}` | How images and fonts are resolved, checked and uploaded. |
 | `recovery` | `{ store, interval? }` | off | Local recovery copies. `interval` defaults to 2000 ms. |
 | `versions` | `{ autoEvery?, keepAuto? }` | `{ 0, 20 }` | Automatic versions every N saves, and how many to keep. |
-| `limits` | `{ maxObjects?, maxDepth?, isAllowedUrl? }` | `{ 50000, 100, isSafeImageUrl }` | Safety limits for loaded documents. |
+| `limits` | `ContentLimits` | see below | Safety and memory limits for documents, images, pages and exports. |
+
+### `ContentLimits`
+
+| Field | Default | Purpose |
+| --- | --- | --- |
+| `maxObjects` | `50000` | Objects in a document or SVG, counting group children and clip paths. |
+| `maxDepth` | `100` | Nesting depth of a document or SVG. |
+| `isAllowedUrl` | `isSafeImageUrl` | Which image addresses may be loaded. |
+| `maxCanvasSide` | `16384` | Longest side of the page, in pixels. Also applies to raster exports. |
+| `maxCanvasPixels` | `67108864` | Largest page or raster export area (8,192 × 8,192, what iOS 18 Safari can draw). |
+| `maxImagePixels` | `67108864` | Largest decoded image. Larger images fail with reason `TOO_LARGE`. |
+| `maxDocumentLength` | `100000000` | Longest document, in characters of JSON. |
+
+Each check is plain arithmetic made before any canvas is created. A document over a limit is refused with `UNSAFE_DOCUMENT`; a raster export over it with `EXPORT_BLOCKED` and a `TOO_LARGE` problem. PDF pages and pictures in a PDF are drawn at a lower resolution instead of failing.
 
 ### `CustomObjectDefinition`
 
@@ -75,6 +89,7 @@ Every image in `missingImages` (from `checkAssets()`) and in `error.missingAsset
 | `TIMEOUT` | The image took longer than `imageTimeout`. `timeoutMs` is set. |
 | `DECODE` | The bytes arrived but are not a picture the browser can decode. |
 | `ABORTED` | The load or check was cancelled. |
+| `TOO_LARGE` | The decoded image has more pixels than `limits.maxImagePixels`. |
 
 ---
 
@@ -85,7 +100,8 @@ Every image in `missingImages` (from `checkAssets()`) and in `error.missingAsset
 | Member | Returns | Description |
 | --- | --- | --- |
 | `canvas` | `StaticCanvas` | The canvas you passed in. |
-| `getDocumentInfo()` | `DocumentInfo` | `{ id, createdAt, updatedAt, metadata }` of the current document. |
+| `getDocumentInfo()` | `DocumentInfo` | `{ id, createdAt, updatedAt, metadata, session }` of the current document. `session` goes up each time the canvas shows another document. |
+| `setPage(changes, label?)` | `void` | Changes the page as one undo step that marks the document unsaved. `PageChanges` is `{ width?, height?, background?, backgroundImage?, overlay?, overlayImage?, clipPath? }`; images and the mask are Fabric objects, and `null` removes one. |
 | `updateMetadata(changes)` | `void` | Merges `changes` into the metadata and marks the document unsaved. |
 | `newDocument(options?)` | `void` | Clears the canvas and starts a new document. Options: `{ id?, metadata?, discardUnsavedChanges? }`. |
 | `toDocument()` | `FabricDocument` | Serializes the canvas. Every object gets an id. |
@@ -118,7 +134,7 @@ When a `storage` adapter is configured and there are unsaved changes, `load`, `l
 
 | Member | Returns | Description |
 | --- | --- | --- |
-| `transaction(label, work)` | the result of `work` | Records everything `work` changes as one undo step. Nested and async work is supported. |
+| `transaction(label, work, options?)` | the result of `work` | Records everything `work` changes, page included, as one undo step. Nested and async work is supported. `TransactionOptions` is `{ rollback? }`: with `rollback: true`, a `work` that throws or rejects leaves the canvas as it was before, with no undo step and no unsaved changes. |
 | `commit(label?)` | `boolean` | Records changes made by code since the last step. Returns `false` if nothing changed. |
 | `undo()` / `redo()` | `Promise<boolean>` | Applies one step. Calls run in order. Failures reject with `HISTORY_FAILED` and keep the step. |
 | `canUndo()` / `canRedo()` | `boolean` | Whether a step is available. |
@@ -151,12 +167,15 @@ When a `storage` adapter is configured and there are unsaved changes, `load`, `l
 
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
+| `textDecorations` | `'shapes'` or `'css'` | `'shapes'` | `shapes` draws underlines, overlines and line-throughs of ordinary text where the canvas does, and fixes letters raised with `deltaY` on Fabric 6. `css` keeps Fabric's `text-decoration`, which each reader places its own way. |
 | `textOnPath` | `'vector'` or `'fabric'` | `'vector'` | `vector` writes text that follows a path exactly as the canvas draws it, including `pathAlign`, `pathSide`, `deltaY`, text backgrounds and underlines. `fabric` keeps Fabric's own output and adds a `TEXT_ON_PATH_APPROXIMATED` warning. |
 | `embedImages` | `boolean` or `'require'` | `false` | Puts every image into the file as data, so the SVG opens without the original URLs. `true` exports anyway and warns with `IMAGE_NOT_EMBEDDED`; `'require'` rejects with `EXPORT_BLOCKED` and an `IMAGE_NOT_EMBEDDED` problem. |
 | `maxEmbeddedImageBytes` | `number` | 25 MB | Larger images are not embedded. |
 | `embedFonts` | `Record<string, FontSource>` | `{}` | Font files to embed, by family. A `FontSource` is a URL, an `ArrayBuffer`, a `Uint8Array` or a `Blob`. Families the canvas uses without a file here get a `FONT_NOT_EMBEDDED` warning. |
 
 Every SVG export also repairs a Fabric 6 and 7 bug: text on a path that contains a space is written as invalid XML (`rotate="..."style="..."`), which browsers and design tools refuse to open.
+
+Clip paths: an inverted clip path is written as an SVG `<mask>`, so the outside of the shape shows as on the canvas. An object whose clip path has a clip path of its own is drawn as a picture with a `CLIP_PATH_RASTERIZED` warning, because Fabric 7 throws and Fabric 6 writes a broken reference for it.
 
 `ExportResult` is `{ format, mimeType, blob, width, height, warnings, document? }`.
 
@@ -206,13 +225,13 @@ A `VersionSummary` is `{ id, documentId, name, kind: 'named' | 'auto', createdAt
 | Member | Returns | Description |
 | --- | --- | --- |
 | `getRecoverableDocuments()` | `Promise<RecoveryRecord[]>` | Recovery copies, newest first. |
-| `getRecovery(documentId?)` | `Promise<RecoveryRecord or undefined>` | One copy. The default is the current document. |
-| `restoreRecovery(documentId?, options?)` | `Promise<FabricDocument>` | Loads a copy as unsaved work, keeping its base revision. |
-| `discardRecovery(documentId?)` | `Promise<void>` | Deletes a copy. |
+| `getRecovery(documentId?, sessionId?)` | `Promise<RecoveryRecord or undefined>` | The newest copy of a document, or the copy one session wrote. The default is the current document. |
+| `restoreRecovery(documentId?, options?)` | `Promise<FabricDocument>` | Loads a copy as unsaved work, keeping its base revision. `RestoreRecoveryOptions` is `LoadOptions` plus `sessionId`, to pick one session's copy. The next save also removes that copy. |
+| `discardRecovery(documentId?, sessionId?)` | `Promise<void>` | Deletes one session's copy, or every copy of the document. |
 | `flushRecovery()` | `Promise<void>` | Writes a copy now. |
 | `getInterruptedLoad()` | `Promise<InterruptedLoad or undefined>` | `{ documentId, startedAt }` of a load that never finished. |
 
-A `RecoveryRecord` is `{ documentId, savedAt, baseRevision, document, files }`.
+A `RecoveryRecord` is `{ documentId, sessionId, active, savedAt, baseRevision, document, files }`. Each engine is one session, so two tabs editing the same document keep separate copies, and a save removes only the copy it covers. `active` is true while the session that wrote the copy is still open in a tab (Web Locks API). Copies written before 1.2 have the session `legacy`. `getInterruptedLoad` reports loads of sessions that are no longer open.
 
 ### Events
 
@@ -425,6 +444,8 @@ The page layout types are `NamedPageSize`, `PageLayout` and `PageLayoutOptions`.
 | `VERSIONS_UNSUPPORTED` / `VERSION_NOT_FOUND` / `VERSION_FAILED` | Storage has no version methods, there is no such version, or an automatic version failed. |
 | `INVALID_EXPORT_OPTIONS` / `EXPORT_BLOCKED` / `EXPORT_ABORTED` / `EXPORT_FAILED` | Export problems, for images, SVG, PDF and `renderDocuments`. |
 | `SVG_IMPORT_FAILED` | `importSvg` got text that is not a valid SVG. |
+| `LOAD_CONFLICT` | The canvas was edited while a document loaded, so the load stopped to keep the edits. Pass `discardUnsavedChanges: true` to replace them. |
+| `DOCUMENT_CHANGED` | Async work (`importSvg`, `replaceImage`, `paste`) finished after another document was opened, so its result was dropped. |
 | `PDF_UNAVAILABLE` | `jspdf` or `svg2pdf.js` is not installed, or there is no browser DOM. |
 | `PDF_FAILED` | A font file is not TrueType or could not be read, or the PDF could not be made. |
 | `ENGINE_DESTROYED` | The engine was used after `destroy()`. |

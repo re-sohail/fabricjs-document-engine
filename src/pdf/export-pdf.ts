@@ -13,11 +13,13 @@ import { embedSvgAssets } from '../export/svg/embed-assets';
 import { withSvgOverrides } from '../export/svg/overrides';
 import { isTextOnPath, textOnPathToSVG } from '../export/svg/text-on-path';
 import type { ContentLimits } from '../security/content-limits';
+
 import { jsPdfStyle, loadFonts, registerFonts, standardFamily } from './fonts';
 import type { PdfFont, RegisteredFonts } from './fonts';
 import { layoutPage } from './page-layout';
 import type { PageLayout, PageLayoutOptions } from './page-layout';
-import { decoratedTextToSVG, hasStraightDecorations } from './text-decorations';
+import { decoratedTextToSVG, hasStraightDecorations } from '../export/svg/text-decorations';
+import { rasterMarkup, safeMultiplier } from '../export/svg/raster-object';
 
 /**
  * Exports canvases and documents as PDF (fabric.js #5906), with jsPDF and
@@ -100,6 +102,7 @@ const RASTER_REASONS = {
   uniformStroke: 'it keeps its outline width while scaled (strokeUniform)',
   font: 'its font has no TrueType file in fonts',
   characters: 'it uses characters the built-in PDF fonts do not have; add a TrueType font that has them',
+  mask: 'it uses an inverted or nested clip path, which PDF vectors cannot draw',
 } as const;
 
 type RasterReason = keyof typeof RASTER_REASONS;
@@ -172,6 +175,7 @@ function rasterReason(object: FabricObject, registered: RegisteredFonts, missing
   walkObjects([object], (child) => {
     if (reason) return;
     if (child.shadow) reason = 'shadow';
+    else if ((child.clipPath as { inverted?: boolean; clipPath?: unknown } | undefined)?.inverted || child.clipPath?.clipPath) reason = 'mask';
     else if (child.globalCompositeOperation && child.globalCompositeOperation !== 'source-over') reason = 'blend';
     else if (typeof child.stroke === 'object' && child.stroke !== null && child.strokeWidth > 0) reason = 'gradientStroke';
     else if (child.strokeUniform && child.stroke && child.strokeWidth > 0) {
@@ -187,67 +191,6 @@ function rasterReason(object: FabricObject, registered: RegisteredFonts, missing
     }
   });
   return reason;
-}
-
-function shadowPadding(object: FabricObject): number {
-  let padding = 0;
-  walkObjects([object], (child) => {
-    const shadow = child.shadow;
-    if (shadow) padding = Math.max(padding, shadow.blur + Math.max(Math.abs(shadow.offsetX), Math.abs(shadow.offsetY)));
-  });
-  return padding + 2;
-}
-
-function usesBlendMode(object: FabricObject): boolean {
-  let blends = false;
-  walkObjects([object], (child) => {
-    if (child.globalCompositeOperation && child.globalCompositeOperation !== 'source-over') blends = true;
-  });
-  return blends;
-}
-
-/**
- * An object as a picture placed where it sits on the canvas. Usually the
- * object alone, so the vectors underneath show through. An object with a
- * blend mode mixes with what lies below it, so its picture includes
- * everything below it within its bounds, which covers those vectors exactly.
- */
-function rasterMarkup(canvas: StaticCanvas, object: FabricObject, multiplier: number): string {
-  object.setCoords();
-  const bounds = object.getBoundingRect();
-  const padding = shadowPadding(object);
-  const left = Math.max(0, Math.floor(bounds.left - padding));
-  const top = Math.max(0, Math.floor(bounds.top - padding));
-  const right = Math.min(canvas.getWidth(), Math.ceil(bounds.left + bounds.width + padding));
-  const bottom = Math.min(canvas.getHeight(), Math.ceil(bounds.top + bounds.height + padding));
-  if (right <= left || bottom <= top) return '';
-  const blends = usesBlendMode(object);
-  const stack = canvas.getObjects();
-  const position = stack.indexOf(object);
-  const saved = {
-    backgroundColor: canvas.backgroundColor,
-    backgroundImage: canvas.backgroundImage,
-    overlayColor: canvas.overlayColor,
-    overlayImage: canvas.overlayImage,
-  };
-  if (!blends) {
-    canvas.backgroundColor = '';
-    canvas.backgroundImage = undefined;
-  }
-  canvas.overlayColor = '';
-  canvas.overlayImage = undefined;
-  let element: HTMLCanvasElement;
-  try {
-    const filter = (candidate: unknown): boolean =>
-      blends ? stack.indexOf(candidate as FabricObject) <= position : candidate === object;
-    element = canvas.toCanvasElement(multiplier, { left, top, width: right - left, height: bottom - top, filter });
-  } finally {
-    Object.assign(canvas, saved);
-  }
-  const url = element.toDataURL('image/png');
-  element.width = 0;
-  element.height = 0;
-  return `<image x="${left}" y="${top}" width="${right - left}" height="${bottom - top}" preserveAspectRatio="none" xlink:href="${url}" />\n`;
 }
 
 function quoteFamily(name: string): string {
@@ -360,7 +303,7 @@ function clipTo(context: PageContext, draw: () => Promise<void> | void): Promise
 
 async function drawRasterPage(canvas: StaticCanvas, context: PageContext): Promise<void> {
   const { layout, options } = context;
-  const multiplier = (layout.scale * (options.dpi ?? 300)) / 72;
+  const multiplier = safeMultiplier((layout.scale * (options.dpi ?? 300)) / 72, canvas.getWidth(), canvas.getHeight(), options.limits);
   const element = withExportView(canvas, options.background ?? 'keep', 'png', () => canvas.toCanvasElement(multiplier));
   try {
     await clipTo(context, () => {
@@ -386,7 +329,7 @@ async function drawVectorPage(canvas: StaticCanvas, context: PageContext): Promi
       const reason = rasterReason(object, registered, missingFonts);
       if (!reason) continue;
       if (mode === 'hybrid') {
-        rasters.set(object, rasterMarkup(canvas, object, multiplier));
+        rasters.set(object, rasterMarkup(canvas, object, multiplier, options.limits));
         warnings.push({
           code: 'PDF_RASTERIZED',
           message: `An object was drawn as a picture at ${options.dpi ?? 300} dpi because ${RASTER_REASONS[reason]}`,
@@ -417,7 +360,7 @@ async function drawVectorPage(canvas: StaticCanvas, context: PageContext): Promi
   const embedded = await embedSvgAssets(
     repairFabricSvg(svg),
     canvas,
-    { textOnPath: 'vector', embedImages: true, maxEmbeddedImageBytes: Number.MAX_SAFE_INTEGER, embedFonts: {} },
+    { textOnPath: 'vector', textDecorations: 'shapes', embedImages: true, maxEmbeddedImageBytes: Number.MAX_SAFE_INTEGER, embedFonts: {} },
     options.signal,
   );
   stop(options.signal);

@@ -593,6 +593,36 @@ getLayers(engine); // [{ id, type, name, index, visible, locked }], top first
 
 引擎会保存每个对象的 `name`，所以图层面板的名称不会丢。在 React 中，`fabricjs-document-engine/react` 的 `useLayers(engine)` 返回同样的列表，并在每次改动后更新。
 
+## 不会丢失的修改
+
+无论用户的操作和你的代码怎样交错，下面这些保证都成立：
+
+```ts
+// Page settings are one undo step and count as unsaved work
+engine.setPage({ width: 1080, height: 1080, background: '#fff8e7' }, 'Square post');
+
+// All or nothing: a failure leaves the canvas as it was
+await engine.transaction('Apply template', async () => {
+  await addTemplateObjects(engine.canvas);
+}, { rollback: true });
+
+// A load refuses to overwrite edits made while it ran
+try {
+  await engine.load('poster-42');
+} catch (error) {
+  if (isDocumentEngineError(error) && error.code === 'LOAD_CONFLICT') askBeforeReplacing();
+}
+```
+
+- **整个页面都会保存。** 画布上的背景图片、叠加层和蒙版（`canvas.backgroundImage`、`overlayImage`、`clipPath`）会被保存、重新打开、检查缺失图片，也会进入版本和恢复副本。
+- **页面修改可以撤销。** `setPage` 修改尺寸、背景、叠加层或蒙版，只算一步撤销；在 `transaction` 里直接修改画布也会被记录。
+- **输入立即算作修改。** 每次按键都会把文档标记为未保存，并触发自动保存和恢复副本，而整次编辑仍然只算一步撤销。
+- **加载不会覆盖修改。** 如果文档加载期间画布被修改，加载会以 `LOAD_CONFLICT` 停止并保留这些修改，除非传入 `discardUnsavedChanges: true`。
+- **异步操作留在原来的文档里。** 在打开另一份文档之后才完成的 SVG 导入、图片替换或粘贴会以 `DOCUMENT_CHANGED` 被丢弃，而不会落到错误的文档里。
+- **每个标签页有自己的恢复副本。** 两个标签页编辑同一份文档时不再互相覆盖副本，保存时只删除它覆盖的那一份。
+- **绘制前先检查尺寸。** 超过浏览器画布限制的页面、导出和图片，会在创建任何画布之前被拒绝，大文件不会让标签页崩溃。限制用 `limits` 设置。
+- **需要时可以回滚。** `transaction(label, work, { rollback: true })` 在 `work` 失败时撤回它做的所有修改。
+
 ## 文档格式
 
 ```ts
@@ -603,7 +633,15 @@ interface FabricDocument {
   updatedAt: string;
   revision?: number;
   fabricVersion?: string;
-  canvas: { width: number; height: number; background?: unknown };
+  canvas: {
+    width: number;
+    height: number;
+    background?: unknown;       // color, gradient or pattern
+    backgroundImage?: object;   // Fabric image behind every object
+    overlay?: unknown;          // color drawn over every object
+    overlayImage?: object;      // Fabric image over every object
+    clipPath?: object;          // mask for the whole canvas
+  };
   objects: SerializedFabricObject[];
   assets?: {
     images: Array<{ url: string; objectIds: string[] }>;
