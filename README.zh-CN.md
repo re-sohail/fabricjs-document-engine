@@ -11,6 +11,8 @@
 
 画布、工具栏和界面都由你自己掌控。这个包在旁边工作，把画布上的内容变成一份可以保存、重新打开、继续编辑的文档。它支持 Fabric 6 和 7，可以用在 React、Next.js、Vue、Svelte 或原生 JavaScript 中。
 
+它也负责文档周边的工作：复制和粘贴、图层顺序、导入 SVG 文件，以及导出和画布看起来一样的图片、SVG 和 PDF。
+
 ## 为什么需要它
 
 做过 fabricjs 编辑器的人，基本都踩过同样的坑。Fabric.js 的序列化和绘制都做得很好，但一份文档需要的不止这些：
@@ -19,8 +21,9 @@
 - **自定义属性会丢失。** `toJSON` 和 `loadFromJSON` 会丢掉 Fabric 不认识的字段，除非你每次调用都把它们列出来（[fabric.js#10887](https://github.com/fabricjs/fabric.js/issues/10887)）。
 - **加载后找不到对象。** Fabric 不给对象分配稳定的 id，所以加载之后没法按 id 获取对象。编组里的子对象更是完全没有 id。
 - **保存互相冲突。** 旧的请求可能最后才返回，覆盖掉新的改动；另一个标签页也可能覆盖这一个的保存。
+- **导出能力有限。** 没有 PDF 导出（[fabric.js#5906](https://github.com/fabricjs/fabric.js/issues/5906)），曲线文字导出成 SVG 后位置不对（[fabric.js#6958](https://github.com/fabricjs/fabric.js/issues/6958)），导出的 SVG 一旦图片链接失效就只剩空框（[fabric.js#1980](https://github.com/fabricjs/fabric.js/issues/1980)）。
 
-这个包解决这四个问题，以及它们背后的问题：图片缺失、字体加载失败、标签页崩溃和旧的文件格式。
+这个包解决这些问题，以及它们背后的问题：图片缺失、字体加载失败、标签页崩溃、旧的文件格式、大文档卡住页面，以及导入的 SVG 文件位置错乱。
 
 ## 安装
 
@@ -30,7 +33,7 @@
 npm install fabricjs-document-engine fabric
 ```
 
-这个包用 TypeScript 编写，自带类型定义。它没有运行时依赖。`fabric` 是 peer dependency，只有使用 hooks 时才需要 React。
+这个包用 TypeScript 编写，自带类型定义。它没有运行时依赖。`fabric` 是 peer dependency，只有使用 hooks 时才需要 React，只有导出 PDF 时才需要 `jspdf` 和 `svg2pdf.js`。
 
 ## 快速开始
 
@@ -61,13 +64,19 @@ await engine.loadDocument(JSON.parse(localStorage.getItem(document.id)!));
 - **自定义对象。** 注册你自己的 Fabric 类，以及它们需要保留的额外属性。
 - **安全保存。** 它会跟踪未保存的改动，也可以自动保存。同一时间只运行一次保存，所以慢的旧保存永远不会覆盖新的改动。修订号检查能发现另一个标签页或设备保存了同一份文档，失败的保存会按退避策略重试。
 - **你自己的存储。** 用两个函数接入任意后端，或者使用内置的内存和 localStorage 适配器。不需要任何托管服务。
-- **图片和字体。** 文档会记录它需要的图片和字体。打开文档时，会先检查每张图片和每种字体。你会拿到缺失内容的准确列表，可以提供替换，只存在于当前标签页的图片会在保存时上传。
+- **图片和字体。** 文档会记录它需要的图片和字体。打开文档时，会先检查每张图片和每种字体。你会拿到缺失内容的准确列表和原因（找不到、服务器错误、CORS、超时或文件损坏），可以提供替换，只存在于当前标签页的图片会在保存时上传。
 - **恢复。** 用户编辑时，未保存的内容会被复制到 IndexedDB；关闭或刷新标签页的那一刻还会再复制一次。崩溃或刷新之后，你可以提示用户恢复，包括只存在于旧标签页中的图片。
-- **导出。** 支持 PNG、JPEG、WebP、SVG 和可编辑的 JSON。区域、缩放和背景由你选择。导出前的预检意味着导出要么成功，要么准确告诉你是哪张图片或哪种字体导致失败。
+- **导出。** 支持 PNG、JPEG、WebP、SVG、PDF 和可编辑的 JSON。区域、缩放和背景由你选择。导出前的预检意味着导出要么成功，要么准确告诉你是哪张图片或哪种字体导致失败。
+- **和画布一致的 SVG。** 沿路径排列的文字在 SVG 中保持原来的位置、背景和下划线。图片和字体可以嵌入文件，所以在 Illustrator 或另一台电脑上也能打开。
+- **带真实文字的 PDF。** 支持 A4、Letter 或画布大小的页面，可以设置页边距，一个文件可以有多页，文字仍然可以选中。只有阴影、混合模式等效果会变成图片。
+- **导入 SVG。** SVG 文件按照它的 viewBox 放置，即使有元素在外面也不会错位；导入前会先移除脚本和外部链接。
+- **批量渲染。** 在一个标签页里为几百份已保存的文档生成缩略图或导出文件，使用几个复用的画布，每份文档完成后都会释放。
 - **版本和迁移。** 保存命名版本，把任意版本恢复为新的修订，还能打开纯 Fabric JSON 或旧版本这个包保存的文档。
+- **大文档。** 对象分批创建，页面保持响应。加载会报告进度，并能用 `AbortSignal` 取消；取消后画布保持原样。
+- **复制、粘贴和图层。** 剪贴板会保留编组的变换和自定义属性，并给每个粘贴出的对象一个新 id；置顶、置底等图层命令可以让固定的背景保持不动。每个操作都是一步撤销。
 - **撤销和重做。** 用户的一次操作就是一步撤销。事务可以把代码里的多处改动合成一个带标签的步骤，撤销和重做后 id 保持不变。
 - **支持 React，不绑定框架。** 为 React 提供 hooks，为其他框架提供一个小的状态 store。
-- **经过加固。** 导入的文档会被清理并限制大小，撤销历史有内存上限，每个功能都在 Chromium、Firefox 和 WebKit 中测试过。
+- **经过加固。** 导入的文档和 SVG 文件会被清理并限制大小，撤销历史有内存上限，每个功能都在 Fabric 6 和 7、Chromium、Firefox 和 WebKit 中测试过。导出结果会和画布逐像素比对。
 
 ## React、Next.js、Vue 和 Svelte
 
@@ -164,6 +173,26 @@ const storage: DocumentStorage = {
 - 对于重试也无法解决的失败，抛出带 `retryable: false` 的错误。其他错误都会重试。
 - 把 `signal` 传给 `fetch`。打开另一份文档时，引擎会中止它。
 
+## 加载进度和取消
+
+包含几千个对象的大型 Fabric.js 文档打开时可能需要一些时间。引擎每次创建 100 个对象，并在每批之间把控制权交还给页面，所以页面保持响应。你可以显示进度，并让用户取消：
+
+```ts
+const controller = new AbortController();
+cancelButton.onclick = () => controller.abort();
+
+await engine.load('big-floor-plan', {
+  signal: controller.signal,
+  onProgress: ({ stage, done, total }) => {
+    // stage is 'prepare', 'images', 'objects' or 'done'
+    progressBar.value = total > 0 ? done / total : 0;
+    progressLabel.textContent = stage;
+  },
+});
+```
+
+取消会以 `LOAD_ABORTED` 拒绝，画布继续显示原来的内容。加载失败时也一样：所有对象都创建完成后才会清空画布。`load:progress` 事件也带有同样的进度，方便调用方以外的代码使用。
+
 ## 自动保存和保存冲突
 
 Fabric.js 自动保存只是一个选项。本节主要讲保存出错时会发生什么，因为编辑器正是在这里丢失内容的。
@@ -228,8 +257,25 @@ engine.on('assets:warning', ({ warnings }) => warnings.forEach((warning) => cons
 
 1. `resolveUrl` 可以改写每个存储的 URL，例如给它签名，或者把资源 id 映射到 CDN。
 2. `loadFont` 对每个字体变体运行一次。之后引擎会检查字体是否真的能渲染，而不是悄悄回退到默认字体。
-3. 所有图片并行加载。如果有缺失，`replaceMissingImage` 可以为每一张提供替换 URL。返回 `null` 则保持缺失。
-4. 如果仍有图片缺失，加载会以 `MISSING_ASSETS` 失败，`error.missingAssets` 列出每个 `{ url, objectIds }`。画布不会被改动。
+3. 图片每次加载六张（`maxConcurrentImages`），每张最多等 30 秒（`imageTimeout`）。如果有缺失，`replaceMissingImage` 可以为每一张提供替换 URL。返回 `null` 则保持缺失。
+4. 如果仍有图片缺失，加载会以 `MISSING_ASSETS` 失败，`error.missingAssets` 列出每个 `{ url, objectIds, failure }`。画布不会被改动。
+
+`failure.reason` 说明图片失败的原因，方便你显示合适的提示：
+
+```ts
+try {
+  await engine.load('poster-42');
+} catch (error) {
+  if (isDocumentEngineError(error) && error.code === 'MISSING_ASSETS') {
+    for (const { url, objectIds, failure } of error.missingAssets) {
+      // NOT_FOUND, HTTP_ERROR, CORS, NETWORK, TIMEOUT, DECODE or ABORTED
+      console.warn(failure?.reason, failure?.status, url, objectIds);
+    }
+  }
+}
+```
+
+浏览器会有意隐藏一些细节。来自其他网站、没有 CORS 头的图片失败时，如果图片设置了 `crossOrigin`，原因是 `CORS`，否则是 `NETWORK`。
 
 不可用的 Fabric.js 字体会产生 `FONT_UNAVAILABLE` 警告，文字使用后备字体。设置 `requireFonts: true` 则改为以 `MISSING_FONTS` 失败。警告也会随 `load:success` 以 `{ document, warnings }` 的形式传递。
 
@@ -276,12 +322,35 @@ downloadExport(result, 'poster.png');
 | `padding` | `content` 或 `selection` 周围的额外空白 | `0` |
 | `background` | `'keep'`、`'transparent'` 或任意 CSS 颜色 | `'keep'` |
 | `signal` | 用于取消的 `AbortSignal` | |
+| `svg` | SVG 导出的选项：`{ textOnPath?, embedImages?, maxEmbeddedImageBytes?, embedFonts? }` | |
 
 - 当前的缩放和平移不影响结果。导出始终使用文档坐标，之后会恢复视图。
 - JPEG 没有透明通道，所以空的或透明的背景会变成白色，而不是黑色。
 - 导出不会改变画布、历史记录或未保存状态。
 - JSON 导出就是保存时生成的那份可移植文档；设置了 `assets.upload` 时，也包括上传后的图片。
-- 不支持导出 PDF。如果需要，把 PNG 或 SVG 结果交给 PDF 库处理。
+- PDF 导出见下文的[导出 PDF](#导出-pdf)。
+
+### 在任何地方都能打开的 SVG
+
+Fabric.js 导出的 SVG 通过 URL 链接图片。在 Illustrator 里、在另一台电脑上，或者签名 URL 过期之后打开，图片就成了空框。可以把图片和字体一起嵌入文件：
+
+```ts
+const result = await engine.export({
+  format: 'svg',
+  svg: {
+    embedImages: true, // or 'require' to block the export when one cannot be embedded
+    embedFonts: { 'Brand Sans': '/fonts/brand-sans.woff2' },
+  },
+});
+```
+
+来自不允许 CORS 的其他网站的图片，页面无法读取。使用 `embedImages: true` 时它会保留为链接，并给出带有对象 id 的 `IMAGE_NOT_EMBEDDED` 警告。字体可以是 URL，也可以是文件字节；设置在单个字母上的字体也会被嵌入。
+
+### SVG 中的曲线文字
+
+Fabric.js 沿路径排列的文字（`text.path`）导出成 SVG 后，和画布上看起来不一样：`pathAlign` 被忽略，抬高的字母移向错误的方向，文字背景和下划线被画成直的。文字里有空格时，Fabric 6 和 7 甚至会写出无效的 XML，浏览器和 Illustrator 都打不开。
+
+SVG 导出会把每个字母写在画布上绘制它的位置，背景和下划线也在同一个位置，所以曲线文字在 SVG 里看起来一样。所有 SVG 阅读器都能理解这种输出，文字也仍然可以编辑。传入 `svg: { textOnPath: 'fabric' }` 可以保留 Fabric 自己的输出。
 
 ### 预检和错误
 
@@ -297,6 +366,68 @@ downloadExport(result, 'poster.png');
 const check = await engine.preflightExport({ format: 'png' });
 if (!check.ok) showProblems(check.problems);
 ```
+
+## 导出 PDF
+
+Fabric.js 本身没有 PDF 导出，常见的做法是把截图塞进 jsPDF，得到的页面模糊，文字也无法选中。`exportPdf` 把画布画成真正的 PDF 矢量和文字。先安装两个可选的库：
+
+```bash
+npm install jspdf svg2pdf.js
+```
+
+```ts
+import { downloadExport } from 'fabricjs-document-engine';
+import { exportPdf } from 'fabricjs-document-engine/pdf';
+
+const { blob, warnings } = await exportPdf(engine, {
+  page: 'A4',      // 'A3', 'A5', 'Letter', 'Legal', 'Tabloid', 'canvas' or [width, height] in points
+  margin: 36,      // half an inch
+  fonts: [
+    { family: 'Inter', source: '/fonts/Inter-Regular.ttf' },
+    { family: 'Inter', source: '/fonts/Inter-Bold.ttf', weight: 'bold' },
+  ],
+  metadata: { title: 'Spring poster' },
+});
+downloadExport({ blob, format: 'pdf' }, 'poster.pdf');
+```
+
+- **文字仍然是文字。** 使用你传入的字体，以及 Arial、Helvetica、Times 和 Courier 的文字，在 PDF 中可以选中和搜索。字体必须是 TrueType（.ttf）文件，大多数字体网站都会在网页格式之外提供它。
+- **默认是混合模式。** 所有内容都画成矢量，只有 PDF 矢量无法表现的部分除外：阴影、混合模式、渐变描边、缩放时保持宽度的描边，以及没有字体文件的文字。这些对象会在原位置被画成 300 dpi 的图片，`warnings` 会指出是哪些对象。使用 `mode: 'vector'` 只输出矢量，使用 `mode: 'raster'` 则每页一张图片。
+- **曲线文字和下划线**的效果和画布上一样，使用的是与 SVG 导出相同的修正。
+- **多页。** 传入引擎、Fabric 画布或已保存文档组成的数组，每个生成一页。已保存的文档会画在离屏画布上，每页完成后释放。
+
+## 批量渲染文档
+
+在一个浏览器标签页里为几百份已保存的设计生成缩略图或 PDF，如果每份设计用一个画布，内存会耗尽，因为浏览器释放画布内存很慢。`renderDocuments` 复用几个离屏画布，并在每份文档之后释放所有对象和缓存画布：
+
+```ts
+import { renderDocuments } from 'fabricjs-document-engine';
+
+for await (const { documentId, result, error } of renderDocuments(savedDocuments, { format: 'png', scale: 0.5, concurrency: 2 })) {
+  if (result) await uploadThumbnail(documentId, result.blob);
+  else console.warn(documentId, error?.message);
+}
+```
+
+每份文档完成后就会返回结果，所以可以逐个上传。损坏的文档会报告自己的 `error`，其余文档继续渲染。`documents` 可以是异步可迭代对象，例如数据库查询的分页结果；`signal` 可以停止整个批次。
+
+## 导入 SVG 文件
+
+Fabric 常用的 SVG 导入方式，即 `loadSVGFromString` 加 `util.groupSVGElements`，会按绘制的内容确定编组大小。SVG 的 viewBox 之外的元素，或者隐藏的元素，会让整幅图移动并改变大小。`importSvg` 保留 SVG 自己的画框：
+
+```ts
+const { objects, viewport, warnings } = await engine.importSvg(svgText, {
+  left: 40,
+  top: 40,
+  fit: { width: 300, height: 200 }, // optional: scale into a box
+  offscreen: 'clip',                 // or 'keep' (default) or 'drop'
+});
+```
+
+- 元素落在 SVG 放置它们的位置，已经应用了 `viewBox` 和 `preserveAspectRatio`。
+- 结果是一个固定布局、大小等于视口的编组；使用 `as: 'objects'` 时则是分开的对象。两种方式都只算一步撤销，每个对象都有 id。
+- 脚本、事件处理器、`foreignObject`、指向其他文件的链接，以及 `limits.isAllowedUrl` 拒绝的图片地址都会被移除，`warnings` 会说明移除了什么。
+- 大小限制和文档相同，过大或嵌套过深的 SVG 会以 `UNSAFE_DOCUMENT` 被拒绝。
 
 ## 版本历史
 
@@ -425,6 +556,43 @@ engine.on('history:change', ({ canUndo, canRedo, undoLabel, redoLabel }) => {
 
 [撤销和重做指南](https://fabricjs-document-engine.jscrate.dev/zh/docs/guides/undo-redo)有在线示例，并更详细地介绍了文字编辑。
 
+## 复制、粘贴和图层顺序
+
+在 Fabric.js 里复制粘贴通常用 `object.clone()`，它会复制 id，还可能把移动过的选区或编组里的对象放错位置。这个剪贴板按对象在画布上的真实位置复制，保留自定义属性，并给每个粘贴出的对象、编组子对象和裁剪路径一个新 id：
+
+```ts
+import { createClipboard } from 'fabricjs-document-engine';
+
+const clipboard = createClipboard(engine);
+
+clipboard.copy();           // the selection, or pass objects
+await clipboard.paste();    // one undo step, 10 units further each time
+clipboard.cut();            // one undo step; the next paste lands in place
+await clipboard.paste({ target: otherEngine });
+
+// Share between tabs through the system clipboard
+await navigator.clipboard.writeText(JSON.stringify(clipboard.read()));
+clipboard.write(JSON.parse(await navigator.clipboard.readText()));
+```
+
+传给 `write` 的内容会像加载的文档一样经过检查，所以粘贴的 JSON 不能带入不安全的图片地址。
+
+图层命令移动指定对象或当前选区，并记录一步撤销。多个选中的对象保持原有顺序。固定的对象（例如背景）永远不会移动：
+
+```ts
+import { bringForward, bringToFront, getLayers, sendBackward, sendToBack } from 'fabricjs-document-engine';
+
+const keepBackground = { pinned: (object) => object.name === 'background' };
+
+bringToFront(engine);
+sendToBack(engine, undefined, keepBackground);   // stops just above the background
+bringForward(engine, [logo]);
+
+getLayers(engine); // [{ id, type, name, index, visible, locked }], top first
+```
+
+引擎会保存每个对象的 `name`，所以图层面板的名称不会丢。在 React 中，`fabricjs-document-engine/react` 的 `useLayers(engine)` 返回同样的列表，并在每次改动后更新。
+
 ## 文档格式
 
 ```ts
@@ -455,7 +623,7 @@ import schema from 'fabricjs-document-engine/schema/document-v1.json';
 
 ## 适用场景
 
-当你在做 Fabric.js 画布编辑器时使用它：设计编辑器、图片编辑器、户型图工具、标签或证书生成器。绘制、选择和序列化仍然由 Fabric 完成。这个包在上面加了一层文档能力：id、历史记录、保存、加载、资源、导出和恢复。
+当你在做 Fabric.js 画布编辑器时使用它：设计编辑器、图片编辑器、户型图工具、标签或证书生成器。绘制、选择和序列化仍然由 Fabric 完成。这个包在上面加了一层文档能力：id、历史记录、保存、加载、资源、恢复、复制和粘贴、图层顺序、SVG 导入，以及图片、SVG 和 PDF 导出。
 
 如果你在比较画布编辑器 JS 库或撤销重做 JavaScript 库，注意它的范围。它不画工具栏，也不做实时协作。[对比页面](https://fabricjs-document-engine.jscrate.dev/zh/docs/overview/comparison)把它和 `fabric-history`、`fabricjs-react` 以及手写的 `toJSON` 放在一起比较。
 
@@ -466,7 +634,8 @@ import schema from 'fabricjs-document-engine/schema/document-v1.json';
 | Fabric | Fabric.js 6 和 Fabric.js 7（peer `^6.0.0 \|\| ^7.0.0`）；Fabric 5 的纯 JSON 通过迁移打开 |
 | 浏览器 | 完整测试在 Chromium、Firefox 和 WebKit 中通过 |
 | React | 18 和 19，可选 |
-| Node | 18 或更高，用于服务端导入、校验和迁移 |
+| Node | 18 或更高，用于服务端导入、校验和迁移。PDF 导出和 `renderDocuments` 需要浏览器 |
+| PDF | 可选的 peer `jspdf` 4 和 `svg2pdf.js` 2.7 或更高，只用于 `fabricjs-document-engine/pdf` |
 | 模块 | ESM 和 CommonJS，带 TypeScript 类型 |
 
 测试过的版本和性能数据（5,000 个对象，除加载外每一步都在 50 ms 以内）见 [docs/compatibility.md](https://github.com/re-sohail/fabricjs-document-engine/blob/main/docs/compatibility.md)。
@@ -492,6 +661,8 @@ import schema from 'fabricjs-document-engine/schema/document-v1.json';
 - 名为 `__proto__`、`constructor` 或 `prototype` 的键会在 Fabric 看到之前被删除。Fabric 会把每个键复制到它创建的对象上，否则这些键可能改变对象的原型。
 - 图片地址在 `assets.resolveUrl` 之后、任何请求之前检查。允许 `http:`、`https:`、`blob:`、相对地址和 `data:image/...`。`javascript:`、`file:` 和非图片的 `data:` 地址会以 `UNSAFE_DOCUMENT` 拒绝。
 - 超过 50,000 个对象、或嵌套超过 100 层的文档会在加载前被拒绝，恶意文件无法卡死标签页。
+- 传给 `importSvg` 的 SVG 文件会在 Fabric 解析之前去掉脚本、事件处理器、`foreignObject` 和指向其他文件的链接，同样的大小限制也适用。
+- 用 `clipboard.write` 写入剪贴板的 JSON 会像文档一样经过检查，所以粘贴的内容不能带入不安全的图片地址。
 
 ```ts
 createDocumentEngine({

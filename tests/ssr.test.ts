@@ -6,7 +6,9 @@ describe('server side import', () => {
     const storage = await import('../src/storage');
     const recovery = await import('../src/recovery');
     const react = await import('../src/react');
+    const pdf = await import('../src/pdf');
     expect(typeof core.createDocumentEngine).toBe('function');
+    expect(typeof pdf.exportPdf).toBe('function');
     expect(typeof storage.createMemoryStorage).toBe('function');
     expect(typeof recovery.createMemoryRecovery).toBe('function');
     expect(typeof react.useDocumentEngine).toBe('function');
@@ -23,5 +25,11 @@ describe('server side import', () => {
     const store = createMemoryRecovery();
     await store.set('a', 1);
     expect(await store.get('a')).toBe(1);
+  });
+
+  it('refuses a PDF export without a browser, before loading any PDF library', async () => {
+    const { exportPdf } = await import('../src/pdf');
+    const error = await exportPdf({ schemaVersion: 1, objects: [] }).catch((reason: unknown) => reason);
+    expect((error as { code?: string }).code).toBe('PDF_UNAVAILABLE');
   });
 });

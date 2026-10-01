@@ -90,3 +90,24 @@ Measured on an Apple Silicon Mac with headless Playwright browsers, with the can
 - Each history step stores only the objects that changed, plus the object order when it changed.
 - Recovery keeps one copy per document. It is removed once a save covers every change.
 - Imported documents are limited to `limits.maxObjects` objects (50,000) and `limits.maxDepth` levels of nesting (100).
+- Loading creates objects 100 at a time and gives the page a turn between chunks. Images are checked six at a time, each for at most 30 seconds.
+- `renderDocuments` keeps `concurrency` off-screen canvases (2) and frees each document's objects, Fabric cache canvases and export canvases after it.
+
+## Fabric behaviour the engine works around
+
+These were reproduced on Fabric 6.9.1 and 7.4.0, and the tests guard each workaround. If a later Fabric release fixes one, the workaround can be removed.
+
+| Problem in Fabric | Fabric issue | What the engine does |
+| --- | --- | --- |
+| A failed image load gives no reason | [#11074](https://github.com/fabricjs/fabric.js/issues/11074) | Each missing image has a `failure` with a reason and status. |
+| Large documents block the page while they load | [#9632](https://github.com/fabricjs/fabric.js/issues/9632) | Objects are created in chunks, with progress and cancelling. |
+| Cloned groups and selections land in the wrong place, and keep their ids | [#2974](https://github.com/fabricjs/fabric.js/issues/2974) | `createClipboard` copies real positions and gives fresh ids. |
+| Groups saved on one version shift on the other | [#11016](https://github.com/fabricjs/fabric.js/issues/11016) | Not reproduced through the engine, which saves `originX` and `originY` on every object. Fixtures from both versions guard it. |
+| Text on a path in SVG ignores `pathAlign`, moves `deltaY` the wrong way and draws backgrounds and underlines straight | [#6958](https://github.com/fabricjs/fabric.js/issues/6958) | SVG export writes each letter as the canvas draws it. |
+| Text on a path with a space is written as invalid XML (`rotate="..."style=`) | | Every SVG export repairs it. |
+| A cached group clips text on a path that rises above the path's box, on the canvas | | Documented; set `objectCaching: false` on such groups. The SVG and PDF show the whole text. |
+| SVG exports link to images by URL | [#1980](https://github.com/fabricjs/fabric.js/issues/1980) | `svg.embedImages` puts them in the file. |
+| `@font-face` export skips fonts set on single letters | | `svg.embedFonts` embeds them. |
+| `util.groupSVGElements` moves SVG artwork when elements lie outside the viewBox | [#10916](https://github.com/fabricjs/fabric.js/issues/10916) | `importSvg` keeps the SVG's viewport. |
+| No PDF export | [#5906](https://github.com/fabricjs/fabric.js/issues/5906) | `fabricjs-document-engine/pdf`. |
+| `dispose()` does not free canvas memory in browsers | [#4848](https://github.com/fabricjs/fabric.js/issues/4848) | `renderDocuments` and exports release canvas pixels themselves. |

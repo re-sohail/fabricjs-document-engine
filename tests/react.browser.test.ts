@@ -5,7 +5,7 @@ import { StrictMode, act, createElement, useEffect, useRef, useState } from 'rea
 import type { ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { Root } from 'react-dom/client';
-import { createDocumentEngine, createDocumentStateStore } from '../src';
+import { bringToFront, createDocumentEngine, createDocumentStateStore } from '../src';
 import type { DocumentEngine, DocumentState } from '../src';
 import {
   DocumentEngineProvider,
@@ -13,6 +13,7 @@ import {
   useDocumentEvent,
   useDocumentState,
   useEngine,
+  useLayers,
 } from '../src/react';
 import type { ReactEngineOptions } from '../src/react';
 import { createMemoryStorage } from '../src/storage';
@@ -204,6 +205,57 @@ describe(`engine lifecycle on Fabric ${fabric.version}`, () => {
     expect(listener).toHaveBeenCalled();
     expect(store.getSnapshot()).not.toBe(before);
     unsubscribe();
+    engine.destroy();
+  });
+});
+
+describe(`useLayers on Fabric ${fabric.version}`, () => {
+  function LayerList({ engine }: { engine: DocumentEngine }): ReactNode {
+    const layers = useLayers(engine);
+    return createElement(
+      'ul',
+      null,
+      layers.map((layer) => createElement('li', { key: layer.id }, layer.name ?? layer.type)),
+    );
+  }
+
+  it('lists layers top first and follows adds, reorders, undo and removes', async () => {
+    const element = document.createElement('canvas');
+    document.body.append(element);
+    const canvas = new Canvas(element, { width: 100, height: 100 });
+    canvases.push(canvas);
+    const engine = createDocumentEngine({ canvas });
+    const names = (): string[] => [...container.querySelectorAll('li')].map((item) => item.textContent ?? '');
+    const container = mount(createElement(LayerList, { engine }));
+    expect(names()).toEqual([]);
+
+    const shapes = ['back', 'middle', 'front'].map((name) => {
+      const shape = new Rect({ width: 5, height: 5 });
+      (shape as unknown as { name: string }).name = name;
+      return shape;
+    });
+    await act(async () => {
+      canvas.add(...shapes);
+      await nextTick();
+    });
+    expect(names()).toEqual(['front', 'middle', 'back']);
+
+    await act(async () => {
+      bringToFront(engine, [shapes[0]!]);
+      await nextTick();
+    });
+    expect(names()).toEqual(['back', 'front', 'middle']);
+
+    await act(async () => {
+      await engine.undo();
+    });
+    expect(names()).toEqual(['front', 'middle', 'back']);
+
+    await act(async () => {
+      canvas.remove(engine.canvas.getObjects()[2]!);
+      await nextTick();
+    });
+    expect(names()).toEqual(['middle', 'back']);
     engine.destroy();
   });
 });

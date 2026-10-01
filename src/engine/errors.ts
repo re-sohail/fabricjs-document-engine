@@ -30,6 +30,9 @@ export type DocumentErrorCode =
   | 'EXPORT_BLOCKED'
   | 'EXPORT_FAILED'
   | 'EXPORT_ABORTED'
+  | 'SVG_IMPORT_FAILED'
+  | 'PDF_UNAVAILABLE'
+  | 'PDF_FAILED'
   | 'ENGINE_DESTROYED';
 
 export interface DocumentIssue {

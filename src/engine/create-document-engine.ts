@@ -10,6 +10,9 @@ import type { ExportFormat, ExportOptions } from '../export/export-options';
 import { preflightExport } from '../export/preflight-export';
 import type { ExportPreflight } from '../export/preflight-export';
 import { mimeTypes, renderRaster, renderSvg, withExportView } from '../export/render-export';
+import { embedSvgAssets } from '../export/svg/embed-assets';
+import { readSvg } from '../import/svg-import';
+import type { SvgImportOptions, SvgImportResult } from '../import/svg-import';
 import { CURRENT_SCHEMA_VERSION } from '../document/document-format';
 import type { DocumentInfo, FabricDocument } from '../document/document-format';
 import { createDocumentInfo } from '../document/create-document';
@@ -24,7 +27,7 @@ import { collectSerializedTypes, walkObjects } from '../fabric/walk-objects';
 import { createHistory } from '../history/create-history';
 import type { HistoryOptions, HistoryState } from '../history/create-history';
 import { migrateDocument } from '../migrations/migrate-document';
-import { secureDocument } from '../security/content-limits';
+import { isSafeImageUrl, secureDocument } from '../security/content-limits';
 import type { ContentLimits } from '../security/content-limits';
 import type { MigrationContext } from '../migrations/migrate-document';
 import { createRecoveryController, restoreRecordedFiles } from '../recovery/recovery-controller';
@@ -57,6 +60,24 @@ export interface DocumentEngineOptions {
 export interface LoadOptions {
   restoreCanvasSize?: boolean;
   discardUnsavedChanges?: boolean;
+  /** Cancels the load. The canvas keeps its current content and the load rejects with `LOAD_ABORTED`. */
+  signal?: AbortSignal;
+  /** Called as the load moves through its stages. The `load:progress` event carries the same values. */
+  onProgress?: (progress: LoadProgress) => void;
+}
+
+/**
+ * Where a load is. `prepare` covers validation and migration, `images` counts
+ * images checked, `objects` counts top-level objects created, and `done` comes
+ * once the canvas shows the document.
+ */
+export type LoadStage = 'prepare' | 'images' | 'objects' | 'done';
+
+export interface LoadProgress {
+  documentId: string | undefined;
+  stage: LoadStage;
+  done: number;
+  total: number;
 }
 
 export interface NewDocumentRequest extends NewDocumentOptions {
@@ -80,6 +101,7 @@ export interface ExportResult {
 
 export interface DocumentEngineEvents {
   'load:start': { documentId: string | undefined };
+  'load:progress': LoadProgress;
   'document:change': { documentId: string };
   'load:success': { document: FabricDocument; warnings: AssetWarning[]; migratedFrom: number | undefined };
   'assets:warning': { warnings: AssetWarning[] };
@@ -110,6 +132,7 @@ export interface DocumentEngine {
   loadDocument(document: unknown, options?: LoadOptions): Promise<FabricDocument>;
   load(documentId: string, options?: LoadOptions): Promise<FabricDocument>;
   importFabricJson(json: string | Record<string, unknown>, options?: ImportOptions): Promise<FabricDocument>;
+  importSvg(svg: string, options?: SvgImportOptions): Promise<SvgImportResult>;
   createVersion(name?: string): Promise<VersionSummary>;
   listVersions(documentId?: string): Promise<VersionSummary[]>;
   restoreVersion(versionId: string): Promise<FabricDocument>;
@@ -294,11 +317,14 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     return document;
   }
 
-  function toLoadError(error: unknown, signal: AbortSignal): DocumentEngineError {
-    if (signal.aborted) {
-      return new DocumentEngineError('LOAD_ABORTED', 'Loading stopped because a newer load started', {
-        cause: error,
-      });
+  function toLoadError(error: unknown, controller: AbortController): DocumentEngineError {
+    if (controller.signal.aborted) {
+      const reason = cancelledByCaller.has(controller)
+        ? 'Loading was cancelled'
+        : destroyed
+          ? 'Loading stopped because the engine was destroyed'
+          : 'Loading stopped because a newer load started';
+      return new DocumentEngineError('LOAD_ABORTED', reason, { cause: error });
     }
     if (isDocumentEngineError(error)) return error;
     const reason = error instanceof Error ? error.message : String(error);
@@ -336,11 +362,30 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     );
   }
 
-  function startLoad(): AbortController {
+  const cancelledByCaller = new WeakSet<AbortController>();
+  const unlinkCallerSignal = new WeakMap<AbortController, () => void>();
+
+  function startLoad(callerSignal?: AbortSignal): AbortController {
     activeLoad?.abort();
     const controller = new AbortController();
     activeLoad = controller;
+    if (callerSignal) {
+      const cancel = (): void => {
+        cancelledByCaller.add(controller);
+        controller.abort();
+      };
+      if (callerSignal.aborted) cancel();
+      else {
+        callerSignal.addEventListener('abort', cancel, { once: true });
+        unlinkCallerSignal.set(controller, () => callerSignal.removeEventListener('abort', cancel));
+      }
+    }
     return controller;
+  }
+
+  function finishLoad(controller: AbortController): void {
+    unlinkCallerSignal.get(controller)?.();
+    unlinkCallerSignal.delete(controller);
   }
 
   async function loadMigratedDocument(
@@ -351,11 +396,19 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
   ): Promise<FabricDocument> {
     ensureUsable();
     protectUnsavedChanges(loadOptions.discardUnsavedChanges);
-    const controller = startedLoad ?? startLoad();
+    const controller = startedLoad ?? startLoad(loadOptions.signal);
     const documentId = describeDocumentId(input);
+    const report = (stage: LoadStage, done: number, total: number): void => {
+      if (controller.signal.aborted) return;
+      const progress: LoadProgress = { documentId, stage, done, total };
+      loadOptions.onProgress?.(progress);
+      events.emit('load:progress', progress);
+    };
     events.emit('load:start', { documentId });
 
     try {
+      if (controller.signal.aborted) throw new Error('aborted');
+      report('prepare', 0, 1);
       await recovery?.markLoadStarted(documentId);
       if (controller.signal.aborted) throw new Error('aborted');
       const { document: migrated, migratedFrom } = migrateDocument(secureDocument(input, options.limits), {
@@ -364,18 +417,20 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
         ...importDetails,
       });
       const checked = checkDocument(migrated);
+      report('prepare', 1, 1);
       const { document, warnings } = await prepareAssetsForLoad(
         checked,
         assetOptions,
         controller.signal,
         options.limits?.isAllowedUrl,
+        (done, total) => report('images', done, total),
       );
       if (controller.signal.aborted) throw new Error('aborted');
       await history.withoutRecording(() =>
         loadIntoCanvas(
           canvas,
           { version: document.fabricVersion, background: document.canvas.background, objects: document.objects },
-          controller.signal,
+          { signal: controller.signal, onObjects: (done, total) => report('objects', done, total) },
         ),
       );
       if (controller.signal.aborted) throw new Error('aborted');
@@ -393,15 +448,17 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
       recovery?.cancel();
       saving.startSession(document.revision ?? 0);
       canvas.requestRenderAll();
+      report('done', 1, 1);
       if (warnings.length > 0) events.emit('assets:warning', { warnings });
       events.emit('document:change', { documentId: document.id });
       events.emit('load:success', { document, warnings, migratedFrom });
       return document;
     } catch (error) {
-      const engineError = toLoadError(error, controller.signal);
+      const engineError = toLoadError(error, controller);
       events.emit('load:error', { error: engineError });
       throw engineError;
     } finally {
+      finishLoad(controller);
       if (activeLoad === controller) {
         activeLoad = null;
         await recovery?.markLoadFinished();
@@ -421,6 +478,17 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     }
     const { id, metadata, ...loadOptions } = importOptions;
     return loadMigratedDocument(parsed, loadOptions, { id, metadata });
+  }
+
+  async function importSvg(svg: string, importOptions: SvgImportOptions = {}): Promise<SvgImportResult> {
+    ensureUsable();
+    const result = await readSvg(svg, importOptions, options.limits);
+    ensureUsable();
+    if (result.objects.length > 0) {
+      history.transaction('Import SVG', () => canvas.add(...result.objects));
+      canvas.requestRenderAll();
+    }
+    return result;
   }
 
   let savesSinceAutomaticVersion = 0;
@@ -521,15 +589,17 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     protectUnsavedChanges(loadOptions?.discardUnsavedChanges);
     // Claim the load before reading storage, so a slow response for an older
     // id cannot replace a newer load that finished first.
-    const controller = startLoad();
+    const controller = startLoad(loadOptions?.signal);
     let stored: unknown;
     try {
+      if (controller.signal.aborted) throw new Error('aborted');
       stored = await source.loadDocument(documentId);
       if (controller.signal.aborted) throw new Error('aborted');
     } catch (error) {
+      finishLoad(controller);
       if (activeLoad === controller) activeLoad = null;
       if (controller.signal.aborted) {
-        const aborted = toLoadError(error, controller.signal);
+        const aborted = toLoadError(error, controller);
         events.emit('load:error', { error: aborted });
         throw aborted;
       }
@@ -612,8 +682,8 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
 
   async function checkBeforeExport(exportOptions: ExportOptions): Promise<ExportPreflight> {
     ensureUsable();
-    const { format } = normalizeExportOptions(exportOptions);
-    return preflightExport(canvas, format, format === 'json' ? [] : fontsOnCanvas(), assetOptions);
+    const { format, svg } = normalizeExportOptions(exportOptions);
+    return preflightExport(canvas, format, format === 'json' ? [] : fontsOnCanvas(), assetOptions, svg);
   }
 
   function describeProblems(check: ExportPreflight): string {
@@ -651,25 +721,47 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
 
     const format = settings.format;
     try {
+      const warnings = [...check.warnings];
       const rendered = withExportView(canvas, settings.background, format, () => {
         const area = resolveExportArea(canvas, settings.area, settings.padding);
         const content =
           format === 'svg'
-            ? Promise.resolve(new Blob([renderSvg(canvas, area, settings.scale)], { type: mimeTypes.svg }))
+            ? Promise.resolve(renderSvg(canvas, area, settings.scale, settings.svg))
             : renderRaster(canvas, area, format, settings.scale, settings.quality);
         return { area, content };
       });
-      const blob = await rendered.content;
+      let blob: Blob;
+      if (format === 'svg') {
+        const embedded = await embedSvgAssets(
+          (await rendered.content) as string,
+          canvas,
+          settings.svg,
+          settings.signal,
+          options.limits?.isAllowedUrl ?? isSafeImageUrl,
+        );
+        stopIfCancelled();
+        if (settings.svg.embedImages === 'require' && embedded.problems.length > 0) {
+          const problems = embedded.warnings
+            .filter((warning) => warning.code === 'IMAGE_NOT_EMBEDDED')
+            .map((warning) => ({ code: 'IMAGE_NOT_EMBEDDED' as const, message: warning.message, url: warning.url, objectIds: warning.objectIds }));
+          throw new DocumentEngineError('EXPORT_BLOCKED', `The export cannot run: ${embedded.problems.join('; ')}`, { problems });
+        }
+        warnings.push(...embedded.warnings);
+        blob = new Blob([embedded.svg], { type: mimeTypes.svg });
+      } else {
+        blob = (await rendered.content) as Blob;
+      }
       return {
         format,
         mimeType: blob.type || mimeTypes[format],
         blob,
         width: Math.round(rendered.area.width * settings.scale),
         height: Math.round(rendered.area.height * settings.scale),
-        warnings: check.warnings,
+        warnings,
       };
     } catch (error) {
       if (isDocumentEngineError(error)) throw error;
+      if (settings.signal?.aborted) throw new DocumentEngineError('EXPORT_ABORTED', 'The export was cancelled', { cause: error });
       if ((error as { name?: unknown } | null)?.name === 'SecurityError') {
         const problem = {
           code: 'CROSS_ORIGIN_IMAGE' as const,
@@ -766,6 +858,7 @@ export function createDocumentEngine(options: DocumentEngineOptions): DocumentEn
     loadDocument,
     load,
     importFabricJson,
+    importSvg,
     createVersion: (name) => storeVersion(name ?? `Version ${new Date().toLocaleString()}`, 'named'),
     listVersions: async (documentId) => requireVersions().listVersions(documentId ?? documentInfo.id),
     restoreVersion,

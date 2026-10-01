@@ -1,9 +1,12 @@
 import type { SerializedFabricObject } from '../document/document-format';
 import { findFontReferences, findImageReferences } from './asset-references';
+import type { ImageLoadFailure } from './image-check';
 
 export interface ImageAsset {
   url: string;
   objectIds: string[];
+  /** Why the image could not be loaded. Set on images in `missingImages` and `missingAssets`. */
+  failure?: ImageLoadFailure;
 }
 
 export interface FontAsset {

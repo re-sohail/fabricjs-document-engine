@@ -8,8 +8,16 @@ import { findUnavailableFonts } from './font-check';
 import type { FontLoader } from './font-check';
 import { refuseUnsafeImageUrls } from '../security/content-limits';
 import { findMissingImages, isCrossOriginUrl, isPortableUrl } from './image-check';
+import type { ImageCheckOptions } from './image-check';
 
-export type AssetWarningCode = 'IMAGE_CROSS_ORIGIN' | 'FONT_UNAVAILABLE' | 'ASSET_NOT_PORTABLE' | 'IMAGE_REPLACED';
+export type AssetWarningCode =
+  | 'IMAGE_CROSS_ORIGIN'
+  | 'FONT_UNAVAILABLE'
+  | 'ASSET_NOT_PORTABLE'
+  | 'IMAGE_REPLACED'
+  | 'IMAGE_NOT_EMBEDDED'
+  | 'FONT_NOT_EMBEDDED'
+  | 'TEXT_ON_PATH_APPROXIMATED';
 
 export interface AssetWarning {
   code: AssetWarningCode;
@@ -32,6 +40,10 @@ export interface AssetOptions {
   loadFont?: FontLoader;
   checkImages?: boolean;
   requireFonts?: boolean;
+  /** Milliseconds to wait for each image before it counts as missing. Default 30000. `0` waits forever. */
+  imageTimeout?: number;
+  /** How many images load at the same time while checking. Default 6. */
+  maxConcurrentImages?: number;
 }
 
 export interface AssetReport {
@@ -44,6 +56,10 @@ export interface AssetReport {
 export interface PreparedDocument {
   document: FabricDocument;
   warnings: AssetWarning[];
+}
+
+function imageCheckOptions(options: AssetOptions): ImageCheckOptions {
+  return { timeoutMs: options.imageTimeout, concurrency: options.maxConcurrentImages };
 }
 
 function cloneDocument(document: FabricDocument): FabricDocument {
@@ -104,19 +120,26 @@ function fontWarnings(fonts: readonly FontAsset[]): AssetWarning[] {
   }));
 }
 
-export async function inspectAssets(document: FabricDocument, options: AssetOptions, signal: AbortSignal): Promise<AssetReport> {
+export async function inspectAssets(
+  document: FabricDocument,
+  options: AssetOptions,
+  signal: AbortSignal,
+  onImageProgress?: (done: number, total: number) => void,
+): Promise<AssetReport> {
   const manifest = buildAssetManifest(document.objects);
   const imagesToCheck = findImageReferences(document.objects).filter((reference) => !isEmbeddedUrl(reference.url));
   const uniqueImages = [...groupByUrl(imagesToCheck)].map(([url, references]) => ({ url, crossOrigin: references[0]!.crossOrigin }));
 
-  const [missingUrls, unavailableFonts] = await Promise.all([
-    options.checkImages === false ? Promise.resolve<string[]>([]) : findMissingImages(uniqueImages, signal),
+  const [failures, unavailableFonts] = await Promise.all([
+    options.checkImages === false ? Promise.resolve([]) : findMissingImages(uniqueImages, signal, { ...imageCheckOptions(options), onProgress: onImageProgress }),
     findUnavailableFonts(manifest.fonts, options.loadFont),
   ]);
-  const missing = new Set(missingUrls);
+  const failuresByUrl = new Map(failures.map((failure) => [failure.url, failure]));
   return {
     manifest,
-    missingImages: manifest.images.filter((image) => missing.has(image.url)),
+    missingImages: manifest.images
+      .filter((image) => failuresByUrl.has(image.url))
+      .map((image) => ({ ...image, failure: failuresByUrl.get(image.url)! })),
     unavailableFonts,
     warnings: [...crossOriginWarnings(document), ...fontWarnings(unavailableFonts)],
   };
@@ -137,10 +160,13 @@ async function replaceMissingImages(
     if (typeof replacement === 'string' && replacement.length > 0) replacements.set(image.url, replacement);
   }
   const brokenReplacements = new Set(
-    await findMissingImages(
-      [...replacements.values()].map((url) => ({ url, crossOrigin: null })),
-      signal,
-    ),
+    (
+      await findMissingImages(
+        [...replacements.values()].map((url) => ({ url, crossOrigin: null })),
+        signal,
+        imageCheckOptions(options),
+      )
+    ).map((failure) => failure.url),
   );
 
   const stillMissing: ImageAsset[] = [];
@@ -168,13 +194,14 @@ export async function prepareAssetsForLoad(
   options: AssetOptions,
   signal: AbortSignal,
   isAllowedUrl?: (url: string) => boolean,
+  onImageProgress?: (done: number, total: number) => void,
 ): Promise<PreparedDocument> {
   const document = cloneDocument(input);
   const { resolveUrl } = options;
   if (resolveUrl) await rewriteUrls(document, async (url) => resolveUrl(url));
   refuseUnsafeImageUrls(document.objects, isAllowedUrl);
 
-  const report = await inspectAssets(document, options, signal);
+  const report = await inspectAssets(document, options, signal, onImageProgress);
   if (options.requireFonts && report.unavailableFonts.length > 0) {
     const families = report.unavailableFonts.map((font) => font.family).join(', ');
     throw new DocumentEngineError('MISSING_FONTS', `These fonts are not available: ${families}`, {
@@ -184,8 +211,8 @@ export async function prepareAssetsForLoad(
 
   const { stillMissing, warnings } = await replaceMissingImages(document, report.missingImages, options, signal);
   if (stillMissing.length > 0) {
-    const urls = stillMissing.map((image) => image.url).join(', ');
-    throw new DocumentEngineError('MISSING_ASSETS', `These images could not be loaded: ${urls}`, {
+    const reasons = stillMissing.map((image) => (image.failure ? `${image.url} (${image.failure.reason})` : image.url)).join(', ');
+    throw new DocumentEngineError('MISSING_ASSETS', `These images could not be loaded: ${reasons}`, {
       missingAssets: stillMissing,
     });
   }

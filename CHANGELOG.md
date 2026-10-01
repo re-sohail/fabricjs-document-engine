@@ -1,5 +1,33 @@
 # fabricjs-document-engine
 
+## 1.1.0
+
+### Minor Changes
+
+- Loading, image errors, clipboard and layers.
+  
+  - **Why an image failed.** Every missing image in `checkAssets().missingImages`, in `MISSING_ASSETS` errors and in `replaceMissingImage` now has a `failure` with a `reason` (`NOT_FOUND`, `HTTP_ERROR`, `CORS`, `NETWORK`, `TIMEOUT`, `DECODE` or `ABORTED`), the HTTP `status` when the browser allows it, and a message. Images now load six at a time (`assets.maxConcurrentImages`) and each waits at most 30 seconds (`assets.imageTimeout`, `0` to wait forever). Before, a hanging image server held the load forever.
+  - **Load progress and cancelling.** `load`, `loadDocument`, `importFabricJson` and `restoreRecovery` accept `signal` and `onProgress`, and the engine emits `load:progress`. Objects are created 100 at a time with a pause for the browser in between, so opening thousands of objects no longer freezes the page. As before, a failed or cancelled load leaves the canvas as it was.
+  - **Clipboard.** `createClipboard(engine)` copies, cuts and pastes as one undo step each. Pasted objects, group children and clip paths get new ids, objects from a moved or rotated selection keep their position, custom properties are kept, and content can move between documents and tabs as checked JSON.
+  - **Layer commands.** `bringToFront`, `sendToBack`, `bringForward`, `sendBackward`, `moveToIndex` and `getLayers` work on objects or the selection, record one undo step, keep the order of several objects, and can pin a background or frame in place. `useLayers(engine)` in `fabricjs-document-engine/react` keeps a layers panel up to date.
+  - **Object names are saved.** The `name` property is now saved with each object, so layer names survive reopening.
+  - **Group tests.** Documents with nested, hidden, rotated, skewed, flipped, clipped and fixed-layout groups are saved on Fabric 6 and 7 and reopened on both, and checked again after ungrouping.
+- PDF export and rendering many documents.
+  
+  - **PDF export.** The new `fabricjs-document-engine/pdf` entry exports engines, Fabric canvases and saved documents as PDF, one page each, with page sizes, orientation, margins and fit. It uses `jspdf` and `svg2pdf.js` as optional peer dependencies, loaded only when a PDF is made, so the core keeps no dependencies. Text in the TrueType fonts you pass, and in Arial, Helvetica, Times and Courier, stays real, selectable text. The default hybrid mode draws everything as vectors and draws only what PDF vectors cannot show (shadows, blend modes, gradient outlines, non-scaling outlines on scaled objects, and text that needs a missing font) as a picture of that object, with a warning. Curved text and underlines come out as on the canvas. Every page is checked against the canvas pixel by pixel in the tests.
+  - **Rendering many documents.** `renderDocuments(documents, options)` renders documents to PNG, JPEG, WebP, SVG or JSON on a few reused off-screen canvases and yields each result as it finishes. A broken document reports its own error and the others still render. Every canvas a batch creates is freed, including Fabric's per-object cache canvases, whose memory browsers otherwise release only much later.
+  - **Freed memory in image exports.** The temporary canvas behind each PNG, JPEG or WebP export is now released as soon as it is encoded, and the font check reuses one small canvas instead of creating a new one on every check.
+- SVG export and import.
+  
+  - **Curved text in SVG.** Text that follows a path is now written as the canvas draws it: each letter at its place and angle, with `pathAlign`, `pathSide`, `pathStartOffset`, `deltaY`, letter styles, text backgrounds, underlines, overlines, line-throughs, outlines and the visible guide path all in the right place. Fabric's own output ignores `pathAlign`, moves raised letters the wrong way and draws backgrounds and underlines straight. Pixel tests compare every case with the canvas on Fabric 6 and 7 in Chromium, Firefox and WebKit. `svg: { textOnPath: 'fabric' }` keeps Fabric's output, with a `TEXT_ON_PATH_APPROXIMATED` warning.
+  - **Valid SVG for text with spaces on a path.** Fabric 6 and 7 write `rotate="..."style="..."` for spaces in text on a path, which is not valid XML, so browsers and Illustrator refuse the whole file. Every SVG export now repairs it.
+  - **Self-contained SVG.** `svg: { embedImages: true }` puts images, including pattern fills and images in groups, into the file as data, and `svg.embedFonts` embeds font files by family, including fonts set on single letters. Images that cannot be read are reported with `IMAGE_NOT_EMBEDDED`, or block the export with `embedImages: 'require'`.
+  - **SVG import.** `engine.importSvg(svg, options)` adds an SVG where its viewport puts it, so elements outside the viewBox or hidden ones no longer move the artwork. It can place and fit the SVG, drop or clip what lies outside, add one group or separate objects, and counts as one undo step. Scripts, event handlers, `foreignObject` and links to other files are removed, and size limits apply. Invalid SVG rejects with the new `SVG_IMPORT_FAILED` code.
+
+### Patch Changes
+
+- fefe1cf: Rewrote the README around the problems it solves, added a Simplified Chinese README (`README.zh-CN.md`), and pointed `homepage` to the documentation site.
+
 ## 1.0.1
 
 ### Patch Changes

@@ -11,6 +11,8 @@ Save, load, undo and redo for an existing [Fabric.js](https://fabricjs.com) canv
 
 You keep your own canvas, toolbar and UI. This package sits beside them and turns what is on the canvas into a document you can save, reopen and keep editing. It works with Fabric 6 and 7, in React, Next.js, Vue, Svelte or plain JavaScript.
 
+It also covers the jobs around the document: copy and paste, layer order, importing SVG files, and exporting images, SVG and PDF that look like the canvas.
+
 ## Why this exists
 
 Anyone who has shipped a fabricjs editor has hit the same walls. Fabric.js serialization and drawing work well, but a document needs more than that:
@@ -19,8 +21,9 @@ Anyone who has shipped a fabricjs editor has hit the same walls. Fabric.js seria
 - **Custom properties vanish.** `toJSON` and `loadFromJSON` drop fields Fabric does not know about, unless you list them on every call ([fabric.js#10887](https://github.com/fabricjs/fabric.js/issues/10887)).
 - **Objects cannot be found again.** After loading, you cannot get an object by id, because Fabric gives objects no stable id. Group children have none at all.
 - **Saves race each other.** An older request can finish last and overwrite newer edits, or a second tab can save over the first.
+- **Export stops at the canvas.** There is no PDF export ([fabric.js#5906](https://github.com/fabricjs/fabric.js/issues/5906)), curved text exports to SVG in the wrong place ([fabric.js#6958](https://github.com/fabricjs/fabric.js/issues/6958)), and an exported SVG shows empty boxes once its image links stop working ([fabric.js#1980](https://github.com/fabricjs/fabric.js/issues/1980)).
 
-This package handles those four problems and the ones behind them: missing images, fonts that fail to load, crashed tabs and old file formats.
+This package handles those problems and the ones behind them: missing images, fonts that fail to load, crashed tabs, old file formats, large documents that freeze the page, and SVG files that land in the wrong place when imported.
 
 ## Install
 
@@ -30,7 +33,7 @@ Install from npm, together with Fabric:
 npm install fabricjs-document-engine fabric
 ```
 
-The package is written in TypeScript and ships its own types. It has no runtime dependencies. `fabric` is a peer dependency, and React is needed only for the hooks.
+The package is written in TypeScript and ships its own types. It has no runtime dependencies. `fabric` is a peer dependency, React is needed only for the hooks, and `jspdf` and `svg2pdf.js` only for PDF export.
 
 ## Quick start
 
@@ -61,13 +64,19 @@ That is the whole setup for a first test. localStorage is fine here; in a real a
 - **Custom objects.** Register your own Fabric classes and the extra properties they need to keep.
 - **Safe saving.** It tracks unsaved changes and can autosave. Only one save runs at a time, so a slow older save can never overwrite newer work. Revision checks catch another tab or device saving the same document, and failed saves are retried with backoff.
 - **Your storage.** Plug in any backend with two functions, or use the built-in memory and localStorage adapters. No hosted service is needed.
-- **Assets and fonts.** Documents record the images and fonts they need. When a document is opened, every image and font is checked first. You get the exact list of what is missing, can offer replacements, and tab-only images are uploaded when you save.
+- **Assets and fonts.** Documents record the images and fonts they need. When a document is opened, every image and font is checked first. You get the exact list of what is missing and why (not found, server error, CORS, timeout or a broken file), can offer replacements, and tab-only images are uploaded when you save.
 - **Recovery.** Unsaved work is copied to IndexedDB while the user edits, and again at the moment the tab is closed or refreshed. After a crash or refresh you can offer to restore it, including images that only existed in the old tab.
-- **Export.** PNG, JPEG, WebP, SVG and editable JSON. You choose the area, scale and background. A preflight check means an export either succeeds or tells you exactly which image or font prevents it.
+- **Export.** PNG, JPEG, WebP, SVG, PDF and editable JSON. You choose the area, scale and background. A preflight check means an export either succeeds or tells you exactly which image or font prevents it.
+- **SVG that matches the canvas.** Text on a path keeps its place, its background and its underline in the SVG. Images and fonts can be embedded, so the file opens in Illustrator or on another computer.
+- **PDF with real text.** Pages in A4, Letter or the canvas size, with margins, several pages per file, and text that stays selectable. Only shadows, blend modes and similar effects become pictures.
+- **SVG import.** SVG files open where their viewBox puts them, even with elements outside it, and scripts and outside links are removed first.
+- **Rendering in bulk.** Thumbnails or exports for hundreds of saved documents in one tab, on a few reused canvases that are freed after each document.
 - **Versions and migration.** Keep named versions, restore any of them as a new revision, and open plain Fabric JSON or documents saved by older versions of this package.
+- **Large documents.** Objects are created in chunks so the page stays responsive. Loads report progress and can be cancelled with an `AbortSignal`, and a cancelled load leaves the canvas as it was.
+- **Copy, paste and layers.** A clipboard that keeps group transforms and custom properties and gives every pasted object a new id, plus bring-to-front and send-to-back commands that keep a pinned background in place. Each is one undo step.
 - **Undo and redo.** One user action is one undo step. Transactions group several code changes into one labelled step, and ids survive undo and redo.
 - **React ready, framework free.** Hooks for React, and a small state store for any other framework.
-- **Hardened.** Imported documents are cleaned and size-limited, undo history has a memory budget, and every feature is tested in Chromium, Firefox and WebKit.
+- **Hardened.** Imported documents and SVG files are cleaned and size-limited, undo history has a memory budget, and every feature is tested on Fabric 6 and 7 in Chromium, Firefox and WebKit. Exports are checked pixel by pixel against the canvas.
 
 ## React, Next.js, Vue and Svelte
 
@@ -164,6 +173,26 @@ const storage: DocumentStorage = {
 - Throw an error with `retryable: false` for failures that retrying cannot fix. Every other error is retried.
 - Pass `signal` to `fetch`. The engine aborts it when another document is opened.
 
+## Load progress and cancelling
+
+Large Fabric.js documents with thousands of objects can take a while to open. The engine creates objects 100 at a time and gives the page a turn between chunks, so the page stays responsive. Show progress, and let the user cancel:
+
+```ts
+const controller = new AbortController();
+cancelButton.onclick = () => controller.abort();
+
+await engine.load('big-floor-plan', {
+  signal: controller.signal,
+  onProgress: ({ stage, done, total }) => {
+    // stage is 'prepare', 'images', 'objects' or 'done'
+    progressBar.value = total > 0 ? done / total : 0;
+    progressLabel.textContent = stage;
+  },
+});
+```
+
+Cancelling rejects with `LOAD_ABORTED` and leaves the canvas showing what it showed before. A failed load does the same: every object is created before the canvas is cleared. The `load:progress` event carries the same progress for code that is not the caller.
+
 ## Autosave and save conflicts
 
 Fabric.js autosave is one option. The rest of this section is about what happens when saves go wrong, because that is where editors lose work.
@@ -228,8 +257,25 @@ engine.on('assets:warning', ({ warnings }) => warnings.forEach((warning) => cons
 
 1. `resolveUrl` can rewrite each stored URL, for example to sign it or to map asset ids to a CDN.
 2. `loadFont` runs for each font variant. Then the engine checks that the font really renders, rather than silently falling back to a default.
-3. Every image loads in parallel. If any are missing, `replaceMissingImage` can supply a replacement URL for each one. Return `null` to leave it missing.
-4. If images are still missing, loading fails with `MISSING_ASSETS`, and `error.missingAssets` lists each `{ url, objectIds }`. The canvas is not touched.
+3. Images load six at a time (`maxConcurrentImages`), and each one has 30 seconds (`imageTimeout`). If any are missing, `replaceMissingImage` can supply a replacement URL for each one. Return `null` to leave it missing.
+4. If images are still missing, loading fails with `MISSING_ASSETS`, and `error.missingAssets` lists each `{ url, objectIds, failure }`. The canvas is not touched.
+
+`failure.reason` tells you why an image failed, so you can show the right message:
+
+```ts
+try {
+  await engine.load('poster-42');
+} catch (error) {
+  if (isDocumentEngineError(error) && error.code === 'MISSING_ASSETS') {
+    for (const { url, objectIds, failure } of error.missingAssets) {
+      // NOT_FOUND, HTTP_ERROR, CORS, NETWORK, TIMEOUT, DECODE or ABORTED
+      console.warn(failure?.reason, failure?.status, url, objectIds);
+    }
+  }
+}
+```
+
+Browsers hide some details on purpose. When an image from another site fails without CORS headers, the reason is `CORS` if the image asked for `crossOrigin`, and `NETWORK` otherwise.
 
 Fabric.js fonts that are not available produce a `FONT_UNAVAILABLE` warning, and the text uses a fallback font. Set `requireFonts: true` to fail with `MISSING_FONTS` instead. Warnings are also delivered with `load:success` as `{ document, warnings }`.
 
@@ -276,12 +322,35 @@ downloadExport(result, 'poster.png');
 | `padding` | Extra space around `content` or `selection` | `0` |
 | `background` | `'keep'`, `'transparent'` or any CSS color | `'keep'` |
 | `signal` | An `AbortSignal` to cancel | |
+| `svg` | `{ textOnPath?, embedImages?, maxEmbeddedImageBytes?, embedFonts? }` for SVG exports | |
 
 - The current zoom and pan do not matter. Exports always use document coordinates, and the view is restored afterwards.
 - A JPEG has no transparency, so an empty or transparent background becomes white instead of black.
 - The export never changes the canvas, the history or the unsaved state.
 - A JSON export is the same portable document a save produces, including uploaded images when `assets.upload` is set.
-- There is no PDF export. Pass the PNG or SVG result to a PDF library if you need one.
+- For PDF, see [Export a PDF](#export-a-pdf) below.
+
+### SVG that opens anywhere
+
+A Fabric.js SVG export links to images by URL. Open the file in Illustrator, on another computer or after a signed URL expires, and the images are empty boxes. Embed them, and the fonts too:
+
+```ts
+const result = await engine.export({
+  format: 'svg',
+  svg: {
+    embedImages: true, // or 'require' to block the export when one cannot be embedded
+    embedFonts: { 'Brand Sans': '/fonts/brand-sans.woff2' },
+  },
+});
+```
+
+An image from another site that does not allow CORS cannot be read by the page. With `embedImages: true` it stays a link and you get an `IMAGE_NOT_EMBEDDED` warning that names the objects. Fonts can be a URL or the file's bytes, and fonts set on single letters are embedded too.
+
+### Curved text in SVG
+
+Fabric.js text on a path (`text.path`) does not export to SVG the way it looks on the canvas: `pathAlign` is ignored, raised letters move the wrong way, and text backgrounds and underlines are drawn straight. When the text contains a space, Fabric 6 and 7 even write invalid XML that browsers and Illustrator refuse to open.
+
+SVG exports write each letter where the canvas draws it, with its background and underline in the same place, so curved text looks the same in the SVG. Every SVG reader understands the output, and it stays editable text. Pass `svg: { textOnPath: 'fabric' }` to keep Fabric's own output instead.
 
 ### Preflight and errors
 
@@ -297,6 +366,68 @@ If any problem is found, `export` rejects with `EXPORT_BLOCKED`, and `error.prob
 const check = await engine.preflightExport({ format: 'png' });
 if (!check.ok) showProblems(check.problems);
 ```
+
+## Export a PDF
+
+Fabric.js has no PDF export, and the usual recipe, a screenshot pasted into jsPDF, gives blurry pages with no selectable text. `exportPdf` draws the canvas as real PDF vectors and text instead. Install the two optional libraries first:
+
+```bash
+npm install jspdf svg2pdf.js
+```
+
+```ts
+import { downloadExport } from 'fabricjs-document-engine';
+import { exportPdf } from 'fabricjs-document-engine/pdf';
+
+const { blob, warnings } = await exportPdf(engine, {
+  page: 'A4',      // 'A3', 'A5', 'Letter', 'Legal', 'Tabloid', 'canvas' or [width, height] in points
+  margin: 36,      // half an inch
+  fonts: [
+    { family: 'Inter', source: '/fonts/Inter-Regular.ttf' },
+    { family: 'Inter', source: '/fonts/Inter-Bold.ttf', weight: 'bold' },
+  ],
+  metadata: { title: 'Spring poster' },
+});
+downloadExport({ blob, format: 'pdf' }, 'poster.pdf');
+```
+
+- **Text stays text.** Text in the fonts you pass, and in Arial, Helvetica, Times and Courier, can be selected and searched in the PDF. Fonts must be TrueType (.ttf) files, which most font sites offer next to the web formats.
+- **Hybrid by default.** Everything is drawn as vectors, except what PDF vectors cannot show: shadows, blend modes, gradient outlines, outlines that keep their width while scaled, and text in a font with no file. Each of those is drawn as a 300 dpi picture of just that object, in its place, and `warnings` names it. Use `mode: 'vector'` for vectors only, or `mode: 'raster'` for one picture per page.
+- **Curved text and underlines** come out as on the canvas, using the same fixes as the SVG export.
+- **Several pages.** Pass an array of engines, Fabric canvases or saved documents to get one page each. Saved documents are drawn on an off-screen canvas that is freed after its page.
+
+## Render many documents
+
+Making thumbnails or PDFs for hundreds of saved designs in one browser tab runs out of memory with a canvas per design, because browsers free canvas memory late. `renderDocuments` reuses a few off-screen canvases and frees every object and cache canvas after each document:
+
+```ts
+import { renderDocuments } from 'fabricjs-document-engine';
+
+for await (const { documentId, result, error } of renderDocuments(savedDocuments, { format: 'png', scale: 0.5, concurrency: 2 })) {
+  if (result) await uploadThumbnail(documentId, result.blob);
+  else console.warn(documentId, error?.message);
+}
+```
+
+Results arrive as each document finishes, so they can be uploaded one by one. A broken document reports its own `error` and the rest still render. `documents` can be an async iterable, such as pages of a database query, and a `signal` stops the batch.
+
+## Import an SVG file
+
+Fabric's usual SVG import, `loadSVGFromString` with `util.groupSVGElements`, sizes the group to what is drawn. An element outside the SVG's viewBox, or a hidden one, then moves and resizes the whole artwork. `importSvg` keeps the SVG's own frame:
+
+```ts
+const { objects, viewport, warnings } = await engine.importSvg(svgText, {
+  left: 40,
+  top: 40,
+  fit: { width: 300, height: 200 }, // optional: scale into a box
+  offscreen: 'clip',                 // or 'keep' (default) or 'drop'
+});
+```
+
+- Elements land where the SVG puts them, after `viewBox` and `preserveAspectRatio`.
+- The result is one group with a fixed layout the size of the viewport, or separate objects with `as: 'objects'`. Either way it is one undo step, and every object gets an id.
+- Scripts, event handlers, `foreignObject`, links to other files and image addresses that `limits.isAllowedUrl` refuses are removed, and `warnings` says what was removed.
+- Size limits apply as for documents, so a huge or deeply nested SVG is refused with `UNSAFE_DOCUMENT`.
 
 ## Version history
 
@@ -425,6 +556,43 @@ engine.on('history:change', ({ canUndo, canRedo, undoLabel, redoLabel }) => {
 
 The [undo and redo guide](https://fabricjs-document-engine.jscrate.dev/docs/guides/undo-redo) has a live demo and covers text editing in more detail.
 
+## Copy, paste and layer order
+
+Copy and paste in Fabric.js usually means `object.clone()`, which copies the id and can place objects from a moved selection or a group in the wrong spot. The clipboard copies objects where they really are on the canvas, keeps custom properties, and gives every pasted object, group child and clip path a new id:
+
+```ts
+import { createClipboard } from 'fabricjs-document-engine';
+
+const clipboard = createClipboard(engine);
+
+clipboard.copy();           // the selection, or pass objects
+await clipboard.paste();    // one undo step, 10 units further each time
+clipboard.cut();            // one undo step; the next paste lands in place
+await clipboard.paste({ target: otherEngine });
+
+// Share between tabs through the system clipboard
+await navigator.clipboard.writeText(JSON.stringify(clipboard.read()));
+clipboard.write(JSON.parse(await navigator.clipboard.readText()));
+```
+
+Content passed to `write` is checked like a loaded document, so pasted JSON cannot carry unsafe image addresses.
+
+Layer commands move objects, or the selection, and record one undo step. Several selected objects keep their order. A pinned object, such as a background, never moves:
+
+```ts
+import { bringForward, bringToFront, getLayers, sendBackward, sendToBack } from 'fabricjs-document-engine';
+
+const keepBackground = { pinned: (object) => object.name === 'background' };
+
+bringToFront(engine);
+sendToBack(engine, undefined, keepBackground);   // stops just above the background
+bringForward(engine, [logo]);
+
+getLayers(engine); // [{ id, type, name, index, visible, locked }], top first
+```
+
+The engine saves each object's `name`, so a layers panel keeps its labels. In React, `useLayers(engine)` from `fabricjs-document-engine/react` returns the same list and updates on every change.
+
 ## Document format
 
 ```ts
@@ -455,7 +623,7 @@ import schema from 'fabricjs-document-engine/schema/document-v1.json';
 
 ## Where it fits
 
-Use it when you are building a Fabric.js canvas editor: a design editor, an image editor, a floor planner, a label or certificate builder. Fabric still does the drawing, selection and serialization. This package adds the document layer on top: ids, history, saving, loading, assets, export and recovery.
+Use it when you are building a Fabric.js canvas editor: a design editor, an image editor, a floor planner, a label or certificate builder. Fabric still does the drawing, selection and serialization. This package adds the document layer on top: ids, history, saving, loading, assets, recovery, copy and paste, layer order, SVG import, and image, SVG and PDF export.
 
 If you are comparing a canvas editor JS library or an undo redo JavaScript library, note the scope. It does not draw a toolbar, and it does not do real-time collaboration. The [comparison page](https://fabricjs-document-engine.jscrate.dev/docs/overview/comparison) sets it next to `fabric-history`, `fabricjs-react` and hand-written `toJSON`.
 
@@ -466,7 +634,8 @@ If you are comparing a canvas editor JS library or an undo redo JavaScript libra
 | Fabric | Fabric.js 6 and Fabric.js 7 (peer `^6.0.0 \|\| ^7.0.0`); plain JSON from Fabric 5 opens through migration |
 | Browsers | Full suite passes in Chromium, Firefox and WebKit |
 | React | 18 and 19, optional |
-| Node | 18 or later, for server-side import, validation and migration |
+| Node | 18 or later, for server-side import, validation and migration. PDF export and `renderDocuments` need a browser |
+| PDF | Optional peers `jspdf` 4 and `svg2pdf.js` 2.7 or later, only for `fabricjs-document-engine/pdf` |
 | Modules | ESM and CommonJS, with TypeScript types |
 
 Tested versions and performance numbers (5,000 objects, every step under 50 ms except load) are in [docs/compatibility.md](https://github.com/re-sohail/fabricjs-document-engine/blob/main/docs/compatibility.md).
@@ -492,6 +661,8 @@ Documents often come from users, so the engine treats them as untrusted:
 - Keys named `__proto__`, `constructor` or `prototype` are removed before Fabric sees them. Fabric copies every key onto the object it creates, so these keys could otherwise change an object's prototype.
 - Image addresses are checked after `assets.resolveUrl`, before anything is fetched. `http:`, `https:`, `blob:`, relative addresses and `data:image/...` are allowed. `javascript:`, `file:` and non-image `data:` addresses are refused with `UNSAFE_DOCUMENT`.
 - A document with more than 50,000 objects, or nested more than 100 levels deep, is refused before loading, so a hostile file cannot freeze the tab.
+- SVG files passed to `importSvg` lose scripts, event handlers, `foreignObject` and links to other files before Fabric parses them, and the same size limits apply.
+- JSON written into the clipboard with `clipboard.write` is checked like a document, so pasted content cannot bring in unsafe image addresses.
 
 ```ts
 createDocumentEngine({

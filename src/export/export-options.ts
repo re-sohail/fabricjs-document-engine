@@ -13,6 +13,29 @@ export type ExportArea = 'canvas' | 'content' | 'selection' | ExportRect;
 
 export type ExportBackground = 'keep' | 'transparent' | (string & {});
 
+/** A font file for `embedFonts`: a URL to fetch, or the file's bytes. */
+export type FontSource = string | ArrayBuffer | Uint8Array | Blob;
+
+export interface SvgExportOptions {
+  /**
+   * How text that follows a path is written. `vector` (the default) writes
+   * each character where Fabric draws it on the canvas. `fabric` keeps
+   * Fabric's own output, which ignores `pathAlign` and draws text
+   * backgrounds and underlines straight.
+   */
+  textOnPath?: 'vector' | 'fabric';
+  /**
+   * Puts every image into the file as data, so the SVG opens anywhere
+   * without the original image URLs. `require` blocks the export when an
+   * image cannot be embedded; `true` exports anyway with a warning.
+   */
+  embedImages?: boolean | 'require';
+  /** The largest image, in bytes, to embed. Default 25 MB. */
+  maxEmbeddedImageBytes?: number;
+  /** Font files to put into the file, by font family, for the families the canvas uses. */
+  embedFonts?: Record<string, FontSource>;
+}
+
 export interface ExportOptions {
   format: ExportFormat;
   scale?: number;
@@ -21,6 +44,15 @@ export interface ExportOptions {
   padding?: number;
   background?: ExportBackground;
   signal?: AbortSignal;
+  /** Options for SVG exports. */
+  svg?: SvgExportOptions;
+}
+
+export interface NormalizedSvgOptions {
+  textOnPath: 'vector' | 'fabric';
+  embedImages: boolean | 'require';
+  maxEmbeddedImageBytes: number;
+  embedFonts: Record<string, FontSource>;
 }
 
 export interface NormalizedExportOptions {
@@ -31,7 +63,10 @@ export interface NormalizedExportOptions {
   padding: number;
   background: ExportBackground;
   signal: AbortSignal | undefined;
+  svg: NormalizedSvgOptions;
 }
+
+export const DEFAULT_MAX_EMBEDDED_IMAGE_BYTES: number = 25 * 1024 * 1024;
 
 const formats = new Set<ExportFormat>(['png', 'jpeg', 'webp', 'svg', 'json']);
 
@@ -65,6 +100,18 @@ export function normalizeExportOptions(options: ExportOptions): NormalizedExport
     throw invalid(`Unknown export area "${String(area)}", use canvas, content, selection or a rectangle`);
   }
 
+  const svg = options.svg ?? {};
+  const textOnPath = svg.textOnPath ?? 'vector';
+  if (textOnPath !== 'vector' && textOnPath !== 'fabric') throw invalid('svg.textOnPath must be "vector" or "fabric"');
+  const embedImages = svg.embedImages ?? false;
+  if (embedImages !== true && embedImages !== false && embedImages !== 'require') {
+    throw invalid('svg.embedImages must be true, false or "require"');
+  }
+  const maxEmbeddedImageBytes = svg.maxEmbeddedImageBytes ?? DEFAULT_MAX_EMBEDDED_IMAGE_BYTES;
+  if (!isPositive(maxEmbeddedImageBytes)) throw invalid('svg.maxEmbeddedImageBytes must be greater than zero');
+  const embedFonts = svg.embedFonts ?? {};
+  if (typeof embedFonts !== 'object' || Array.isArray(embedFonts)) throw invalid('svg.embedFonts must map font families to font files');
+
   return {
     format: options.format,
     scale,
@@ -73,5 +120,6 @@ export function normalizeExportOptions(options: ExportOptions): NormalizedExport
     padding,
     background: options.background ?? 'keep',
     signal: options.signal,
+    svg: { textOnPath, embedImages, maxEmbeddedImageBytes, embedFonts },
   };
 }

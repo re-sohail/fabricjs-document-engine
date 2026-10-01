@@ -1,5 +1,6 @@
 import type { StaticCanvas, TMat2D } from 'fabric';
-import type { ExportBackground, ExportFormat, ExportRect } from './export-options';
+import type { ExportBackground, ExportFormat, ExportRect, NormalizedSvgOptions } from './export-options';
+import { withTextOnPathSVG } from './svg/text-on-path';
 
 const identity: TMat2D = [1, 0, 0, 1, 0, 0];
 
@@ -45,19 +46,37 @@ export function renderRaster(
   quality: number,
 ): Promise<Blob> {
   const rendered = canvas.toCanvasElement(scale, area);
-  return new Promise((resolve, reject) => {
+  // Browsers keep a canvas's pixels until it is resized or collected, so
+  // free the temporary one as soon as it is encoded.
+  const release = (): void => {
+    rendered.width = 0;
+    rendered.height = 0;
+  };
+  return new Promise<Blob>((resolve, reject) => {
     rendered.toBlob(
       (blob) => (blob ? resolve(blob) : reject(new Error(`The browser could not encode ${format}`))),
       mimeTypes[format],
       quality,
     );
-  });
+  }).finally(release);
 }
 
-export function renderSvg(canvas: StaticCanvas, area: ExportRect, scale: number): string {
-  return canvas.toSVG({
-    viewBox: { x: area.left, y: area.top, width: area.width, height: area.height },
-    width: String(area.width * scale),
-    height: String(area.height * scale),
-  });
+/**
+ * Fabric 6 and 7 write `rotate="..."style="..."` with no space for the
+ * spaces in text on a path, which is not valid XML: browsers, Illustrator and
+ * Inkscape refuse to open the file. Put the missing space back.
+ */
+export function repairFabricSvg(svg: string): string {
+  return svg.replace(/(rotate="[^"]*")(style=)/g, '$1 $2');
+}
+
+export function renderSvg(canvas: StaticCanvas, area: ExportRect, scale: number, options?: Pick<NormalizedSvgOptions, 'textOnPath'>): string {
+  const write = (): string =>
+    canvas.toSVG({
+      viewBox: { x: area.left, y: area.top, width: area.width, height: area.height },
+      width: String(area.width * scale),
+      height: String(area.height * scale),
+    });
+  const svg = (options?.textOnPath ?? 'vector') === 'vector' ? withTextOnPathSVG(canvas, write).result : write();
+  return repairFabricSvg(svg);
 }

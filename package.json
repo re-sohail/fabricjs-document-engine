@@ -1,7 +1,7 @@
 {
   "name": "fabricjs-document-engine",
-  "version": "1.0.2",
-  "description": "Fabric.js save and load, undo and redo, and autosave for an existing canvas: stable object ids, custom objects, export, recovery and save-conflict protection.",
+  "version": "1.1.0",
+  "description": "Fabric.js save and load, undo and redo, and autosave for an existing canvas: stable object ids, custom objects, copy and paste, SVG import, PNG, SVG and PDF export, and recovery.",
   "keywords": [
     "fabricjs",
     "fabric.js",
@@ -27,6 +27,12 @@
     "object id",
     "export svg",
     "export image",
+    "text on path",
+    "import svg",
+    "layers",
+    "copy paste",
+    "pdf",
+    "export pdf",
     "recovery",
     "indexeddb",
     "react",
@@ -91,6 +97,16 @@
         "default": "./dist/react.cjs"
       }
     },
+    "./pdf": {
+      "import": {
+        "types": "./dist/pdf.d.ts",
+        "default": "./dist/pdf.js"
+      },
+      "require": {
+        "types": "./dist/pdf.d.cts",
+        "default": "./dist/pdf.cjs"
+      }
+    },
     "./schema/document-v1.json": "./schema/document-v1.schema.json",
     "./package.json": "./package.json"
   },
@@ -109,7 +125,9 @@
   },
   "peerDependencies": {
     "fabric": "^6.0.0 || ^7.0.0",
-    "react": "^18.0.0 || ^19.0.0"
+    "react": "^18.0.0 || ^19.0.0",
+    "jspdf": "^4.0.0",
+    "svg2pdf.js": "^2.7.0"
   },
   "publishConfig": {
     "access": "public",
@@ -136,16 +154,25 @@
     "ajv": "^8.20.0",
     "fabric": "^7.4.0",
     "fabric6": "npm:fabric@^6.9.1",
+    "jspdf": "^4.2.1",
+    "pdfjs-dist": "^6.3.289",
     "playwright": "^1.63.0",
     "publint": "^0.3.24",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
+    "svg2pdf.js": "^2.8.1",
     "tsdown": "^0.23.0",
     "typescript": "^5.9.3",
     "vitest": "^5.0.2"
   },
   "peerDependenciesMeta": {
     "react": {
+      "optional": true
+    },
+    "jspdf": {
+      "optional": true
+    },
+    "svg2pdf.js": {
       "optional": true
     }
   }

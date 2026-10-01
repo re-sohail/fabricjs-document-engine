@@ -20,7 +20,7 @@ The document contains a custom class that this page has not registered. Pass it 
 
 ## My custom property is not saved
 
-List it in `properties` when you register the class, for example `{ fabricClass: Sticker, properties: ['label'] }`. Only `id` and registered properties are added to what Fabric saves by default.
+List it in `properties` when you register the class, for example `{ fabricClass: Sticker, properties: ['label'] }`. Only `id`, `name` and registered properties are added to what Fabric saves by default.
 
 ## Loading fails with MISSING_ASSETS
 
@@ -29,6 +29,25 @@ List it in `properties` when you register the class, for example `{ fabricClass:
 - fix the URLs with `assets.resolveUrl`,
 - offer replacements with `assets.replaceMissingImage`, or
 - open the file, then call `engine.replaceImage(oldUrl, newUrl)` once you have the right image.
+
+Each entry has a `failure` that says why it failed:
+
+- `NOT_FOUND` or `HTTP_ERROR`: check `failure.status` and the URL on your server.
+- `CORS`: the other site must send `Access-Control-Allow-Origin` for this page. Images that ask for `crossOrigin` cannot load without it.
+- `NETWORK`: the address could not be reached. For another site without CORS headers, the browser hides the real reason, so open the URL directly to see it.
+- `TIMEOUT`: raise `assets.imageTimeout` for slow servers, or lower `assets.maxConcurrentImages` when many large images compete.
+- `DECODE`: the file is not an image the browser can read, for example an HTML error page served with status 200, or a format the browser does not support.
+
+## Opening a large document freezes the page
+
+Pass `onProgress` to show where the load is, and a `signal` so the user can cancel it. Objects are created in chunks, so the page stays responsive while they are made. If the page still pauses, the time is usually spent drawing: a canvas with thousands of objects takes a while to render once it is loaded, which is Fabric's work, not the load's. Turning off `objectCaching` for many small shapes, or splitting a huge drawing into pages, helps there.
+
+## Groups move after reopening or ungrouping
+
+Groups are tested to reopen with every object in the same place on Fabric 6 and 7, including documents saved on one version and opened on the other, and to stay in place when ungrouped afterwards (fabric.js issue #11016). If a group still moves:
+
+- Check that it was saved with `engine.toDocument()` or `engine.save()`, not `canvas.toJSON()`. The engine writes `originX` and `originY` on every object, because Fabric 6 and 7 use different defaults, and plain Fabric JSON from version 6 opened on version 7 shifts by half of each object's size.
+- Ungroup by removing the children from the group first, then removing the group and adding the children, all inside one `engine.transaction('Ungroup', ...)`. `group.removeAll()` returns children that keep their position on the canvas.
 
 ## Text looks different after reopening
 
@@ -43,6 +62,44 @@ Read `error.problems`:
 - **MISSING_FONT**: only with `requireFonts`. Load the font first.
 
 Run `engine.preflightExport({ format })` to show these before the user clicks export.
+
+## Curved text looks different in the SVG
+
+SVG exports write text on a path the way the canvas draws it. If it still differs:
+
+- The text is in a group with object caching on. Fabric sizes a group's cache to the path's box, so letters that rise above the curve are cut off on the canvas, while the SVG shows them. Set `objectCaching: false` on that group to see the whole text on the canvas too.
+- The SVG is opened somewhere without the font. Pass the font in `svg.embedFonts`.
+- `svg.textOnPath: 'fabric'` is set. That keeps Fabric's own output, which ignores `pathAlign` and draws text backgrounds and underlines straight.
+
+## An SVG from Fabric does not open in Illustrator or the browser
+
+Fabric 6 and 7 write text on a path that contains a space as `rotate="..."style="..."`, which is not valid XML. Exports through `engine.export({ format: 'svg' })` repair it. If you call `canvas.toSVG()` yourself, insert the missing space or export through the engine.
+
+## Images are missing when the SVG is opened elsewhere
+
+Fabric links to images by URL. Export with `svg: { embedImages: true }` to put them in the file. An image from another site that does not send CORS headers cannot be read by the page, so it stays a link with an `IMAGE_NOT_EMBEDDED` warning. Load it with `crossOrigin: 'anonymous'` from a server that allows CORS, or use `embedImages: 'require'` to stop the export instead.
+
+## An imported SVG lands in the wrong place
+
+`util.groupSVGElements` sizes the group to the drawn content, so elements outside the viewBox, or hidden ones, move everything. `engine.importSvg(svg)` keeps the SVG's viewport instead. Pass `offscreen: 'drop'` or `'clip'` to remove or hide what lies outside it.
+
+## PDF export fails with PDF_UNAVAILABLE
+
+Install the optional libraries with `npm install jspdf svg2pdf.js`. `mode: 'raster'` needs only `jspdf`. PDF export also needs a browser: in Node, render in a headless browser instead.
+
+## Text in the PDF is a picture, or uses the wrong font
+
+Pass a TrueType (.ttf) file for each family the canvas uses in `fonts`, with one entry per weight and style you use. Without a file, hybrid mode draws that text as a picture so it looks right, and `warnings` says so. Pass `missingFonts: 'substitute'` to keep it as text in the closest built-in font instead. The built-in PDF fonts have Latin-1 letters only, so text in other scripts always needs a font file that has those letters.
+
+WOFF, WOFF2 and OpenType files with CFF outlines are refused with `PDF_FAILED`, because jsPDF reads TrueType only.
+
+## Some objects in the PDF look slightly blurred
+
+In hybrid mode, objects PDF vectors cannot draw, such as shadows and blend modes, are drawn as pictures. Raise `dpi` (default 300) for sharper pictures, or remove the shadow to keep the object as vectors. `warnings` lists each object drawn as a picture.
+
+## Rendering many documents runs out of memory
+
+Use `renderDocuments` rather than one canvas per document. It reuses a few canvases and frees each document's objects and cache canvases. Keep `concurrency` low (the default is 2), and upload each result as it arrives rather than collecting them all.
 
 ## A JPEG export has a black background
 

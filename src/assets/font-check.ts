@@ -33,9 +33,18 @@ export function fontDescriptor(font: Pick<FontAsset, 'family' | 'weight' | 'styl
   return `${font.style} ${font.weight} ${size}px ${cssFamily(firstFamily(font.family))}`;
 }
 
+let measuringContext: CanvasRenderingContext2D | null | undefined;
+
+/** One small canvas for every check, rather than a new one each time. */
 function createMeasuringContext(): CanvasRenderingContext2D | null {
   if (typeof document === 'undefined') return null;
-  return document.createElement('canvas').getContext('2d');
+  if (measuringContext === undefined) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    measuringContext = canvas.getContext('2d');
+  }
+  return measuringContext;
 }
 
 export function isFontRenderable(font: Pick<FontAsset, 'family' | 'weight' | 'style'>, context: CanvasRenderingContext2D | null = createMeasuringContext()): boolean {

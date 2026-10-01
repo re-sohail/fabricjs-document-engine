@@ -5,10 +5,11 @@ import { findUnavailableFonts } from '../assets/font-check';
 import { isCrossOriginUrl, isPortableUrl } from '../assets/image-check';
 import { readObjectId } from '../fabric/object-ids';
 import { childrenOf } from '../fabric/walk-objects';
-import type { ExportFormat } from './export-options';
+import type { ExportFormat, NormalizedSvgOptions } from './export-options';
 import { isRasterFormat } from './export-options';
+import { findTextOnPath } from './svg/text-on-path';
 
-export type ExportProblemCode = 'MISSING_IMAGE' | 'CROSS_ORIGIN_IMAGE' | 'MISSING_FONT';
+export type ExportProblemCode = 'MISSING_IMAGE' | 'CROSS_ORIGIN_IMAGE' | 'MISSING_FONT' | 'IMAGE_NOT_EMBEDDED';
 
 export interface ExportProblem {
   code: ExportProblemCode;
@@ -74,6 +75,7 @@ export async function preflightExport(
   format: ExportFormat,
   fonts: readonly FontAsset[],
   assetOptions: AssetOptions,
+  svgOptions?: Pick<NormalizedSvgOptions, 'textOnPath' | 'embedImages'>,
 ): Promise<ExportPreflight> {
   const problems: ExportProblem[] = [];
   const warnings: AssetWarning[] = [];
@@ -90,12 +92,24 @@ export async function preflightExport(
         url,
         objectIds,
       });
-    } else if (format === 'svg' && !isPortableUrl(url)) {
+    } else if (format === 'svg' && !isPortableUrl(url) && !svgOptions?.embedImages) {
       warnings.push({
         code: 'ASSET_NOT_PORTABLE',
         message: `The SVG links to ${shortUrl(url)}, which only exists in this tab`,
         url,
         objectIds,
+      });
+    }
+  }
+
+  if (format === 'svg' && svgOptions?.textOnPath === 'fabric') {
+    const texts = findTextOnPath(canvas);
+    if (texts.length > 0) {
+      warnings.push({
+        code: 'TEXT_ON_PATH_APPROXIMATED',
+        message:
+          "Text on a path is written with Fabric's own SVG, which ignores pathAlign and draws text backgrounds and underlines straight. Use svg.textOnPath: 'vector' to match the canvas.",
+        objectIds: texts.map((text) => readObjectId(text)).filter((id): id is string => id !== undefined),
       });
     }
   }

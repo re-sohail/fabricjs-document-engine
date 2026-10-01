@@ -80,7 +80,11 @@ describe(`assets and fonts on Fabric ${fabric.version}`, () => {
     engine.on('assets:warning', (event) => warnings.push(...event.warnings));
 
     await engine.loadDocument(documentWithImages(['/gone.png']));
-    expect(replaceMissingImage).toHaveBeenCalledWith({ url: '/gone.png', objectIds: ['image-0'] });
+    expect(replaceMissingImage).toHaveBeenCalledWith({
+      url: '/gone.png',
+      objectIds: ['image-0'],
+      failure: expect.objectContaining({ url: '/gone.png', reason: 'NOT_FOUND', status: 404 }),
+    });
     expect(srcOf(engine.canvas.getObjects()[0])).toBe(smallPicture);
     expect(warnings.map((warning) => warning.code)).toEqual(['IMAGE_REPLACED']);
   });

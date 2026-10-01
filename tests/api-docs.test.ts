@@ -21,6 +21,7 @@ describe('API reference', () => {
       import('../src/storage'),
       import('../src/recovery'),
       import('../src/react'),
+      import('../src/pdf'),
     ]);
     const names = entries.flatMap((entry) => Object.keys(entry));
     expect(undocumented(names)).toEqual([]);
