@@ -21,9 +21,24 @@ export async function mapWithConcurrency<Item, Result>(
   return results;
 }
 
-/** Lets the browser paint and handle input before the next piece of work. */
+/**
+ * Lets the browser paint, handle input and run other queued work, such as a
+ * framework's re-render after a progress update, before the next piece of
+ * work. A message-channel task runs after the tasks already queued and,
+ * unlike `setTimeout`, is not delayed by timer clamping. `scheduler.yield()`
+ * is not used: it resumes ahead of other queued tasks, so a UI waiting to
+ * show progress would not render until the work had finished.
+ */
 export function yieldToEventLoop(): Promise<void> {
-  const scheduler = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
-  if (typeof scheduler?.yield === 'function') return scheduler.yield();
+  if (typeof MessageChannel === 'function') {
+    return new Promise((resolve) => {
+      const channel = new MessageChannel();
+      channel.port1.onmessage = () => {
+        channel.port1.close();
+        resolve();
+      };
+      channel.port2.postMessage(undefined);
+    });
+  }
   return new Promise((resolve) => setTimeout(resolve, 0));
 }

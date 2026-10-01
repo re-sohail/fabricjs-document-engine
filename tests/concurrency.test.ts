@@ -51,6 +51,19 @@ describe('mapWithConcurrency', () => {
 });
 
 describe('yieldToEventLoop', () => {
+  it('lets a message queued earlier run first', async () => {
+    const order: string[] = [];
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => {
+      channel.port1.close();
+      order.push('queued');
+    };
+    channel.port2.postMessage(undefined);
+    await yieldToEventLoop();
+    order.push('after');
+    expect(order).toEqual(['queued', 'after']);
+  });
+
   it('lets a timer that is already due run first', async () => {
     const order: string[] = [];
     setTimeout(() => order.push('timer'), 0);

@@ -224,17 +224,33 @@ describe(`loading progress and cancelling on Fabric ${fabric.version}`, () => {
     expect(engine.canvas.backgroundColor).toBeFalsy();
   });
 
-  it('gives the browser a turn between chunks of objects', async () => {
+  it('lets other queued work run between chunks, so a progress bar can update', async () => {
     const engine = createEngine();
-    const yieldTurn = vi.fn(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
-    vi.stubGlobal('scheduler', { yield: yieldTurn });
-    try {
-      await engine.loadDocument(documentOf(rects(450)));
-    } finally {
-      vi.unstubAllGlobals();
-    }
-    // Five chunks of 100 objects, with a turn between each pair.
-    expect(yieldTurn).toHaveBeenCalledTimes(4);
+    // Work another part of the page queues during the load, the way React
+    // and other frameworks schedule a re-render after a progress update.
+    const ranDuringLoad: string[] = [];
+    let loading = true;
+    const queueWork = (): void => {
+      setTimeout(() => {
+        if (!loading) return;
+        ranDuringLoad.push('timer');
+        queueWork();
+      }, 0);
+      const channel = new MessageChannel();
+      channel.port1.onmessage = () => {
+        channel.port1.close();
+        if (loading) ranDuringLoad.push('message');
+      };
+      channel.port2.postMessage(undefined);
+    };
+    await engine.loadDocument(documentOf(rects(5000)), {
+      onProgress: (progress) => {
+        if (progress.stage === 'objects' && progress.done === 0) queueWork();
+      },
+    });
+    loading = false;
+    expect(ranDuringLoad).toContain('message');
+    expect(ranDuringLoad).toContain('timer');
   });
 
   it.each([
