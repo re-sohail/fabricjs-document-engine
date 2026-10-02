@@ -12,6 +12,7 @@ function testAssetRoutes(): Plugin {
   const pixel = readFileSync('tests/fixtures/pixel.png');
   // Roboto, Apache License 2.0.
   const font = readFileSync('tests/fixtures/fonts/Roboto-Medium.ttf');
+  const arabicFont = readFileSync('tests/fixtures/fonts/Amiri-Regular.ttf');
   return {
     name: 'test-asset-routes',
     configureServer(server) {
@@ -35,6 +36,11 @@ function testAssetRoutes(): Plugin {
             response.setHeader('Content-Type', 'font/ttf');
             response.setHeader('Access-Control-Allow-Origin', '*');
             return response.end(font);
+          case 'amiri.ttf':
+            response.statusCode = 200;
+            response.setHeader('Content-Type', 'font/ttf');
+            response.setHeader('Access-Control-Allow-Origin', '*');
+            return response.end(arabicFont);
           case 'big.png': {
             // A real picture padded past a few kilobytes, for size limits.
             response.statusCode = 200;
@@ -72,13 +78,19 @@ function testAssetRoutes(): Plugin {
   };
 }
 
+const onCI = Boolean(process.env.CI);
+
 function browserProject(name: string, browser: 'chromium' | 'firefox' | 'webkit' = 'chromium') {
   return {
     name,
     include: ['tests/**/*.browser.test.ts'],
+    provide: {
+      budgetScale: onCI ? 3 : 1,
+      checkBudgets: !(onCI && browser === 'webkit'),
+    },
     browser: {
       enabled: true,
-      provider: playwright(),
+      provider: playwright(browser === 'chromium' ? { launchOptions: { args: ['--font-render-hinting=none'] } } : {}),
       headless: true,
       instances: [{ browser, name }],
     },

@@ -1,16 +1,27 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { Canvas, IText } from 'fabric';
 import type { ITextProps } from 'fabric';
 import { BoundedTextbox, ShapedIText, ShapedTextbox } from '../src/text';
 
-const ARABIC = 'مرحبا بالعالم العربي الجميل';
+const ARABIC = 'تستطيع ستنتقل يستمتعون بالمستشفيات';
+const ARABIC_FONT = 'Amiri Test';
 const open: Canvas[] = [];
+let face: FontFace;
+
+beforeAll(async () => {
+  face = new FontFace(ARABIC_FONT, await (await fetch('/__test-assets__/amiri.ttf')).arrayBuffer());
+  document.fonts.add(await face.load());
+});
+
+afterAll(() => {
+  document.fonts.delete(face);
+});
 
 afterEach(async () => {
   for (const canvas of open.splice(0)) await canvas.dispose();
 });
 
-const options: Partial<ITextProps> = { fontSize: 40, fontFamily: 'sans-serif', direction: 'rtl' as const, textAlign: 'right', originX: 'right' as const, originY: 'top' as const, left: 560, top: 20 };
+const options: Partial<ITextProps> = { fontSize: 40, fontFamily: ARABIC_FONT, direction: 'rtl' as const, textAlign: 'right', originX: 'right' as const, originY: 'top' as const, left: 560, top: 20 };
 
 function wordEnds(text: string): number[] {
   return [...text].flatMap((letter, index) => (letter === ' ' ? [index] : []));
@@ -62,8 +73,8 @@ function cursorsInGaps(make: (text: string) => IText): Array<{ index: number; mi
 describe('cursor positions follow joined letters (fabric.js #4815)', () => {
   it('reproduces: IText letter positions drift from the drawn Arabic text', () => {
     const context = document.createElement('canvas').getContext('2d')!;
-    context.font = 'normal normal 400px sans-serif';
-    const text = new IText(ARABIC, { fontSize: 40, fontFamily: 'sans-serif' });
+    context.font = `normal normal 400px "${ARABIC_FONT}"`;
+    const text = new IText(ARABIC, { fontSize: 40, fontFamily: ARABIC_FONT });
     text.getLineWidth(0);
     const bounds = (text as unknown as { __charBounds: Array<Array<{ left: number }>> }).__charBounds[0]!;
     const letters = [...ARABIC];
@@ -83,12 +94,12 @@ describe('cursor positions follow joined letters (fabric.js #4815)', () => {
 
   it('measures lines as the browser draws them', () => {
     const context = document.createElement('canvas').getContext('2d')!;
-    for (const [text, fontFamily] of [
-      [ARABIC, 'sans-serif'],
-      ['office affluent fifty AVATAR', 'serif'],
+    for (const [text, fontFamily, cssFamily] of [
+      [ARABIC, ARABIC_FONT, `"${ARABIC_FONT}"`],
+      ['office affluent fifty AVATAR', 'serif', 'serif'],
     ] as const) {
       const shaped = new ShapedIText(text, { fontSize: 40, fontFamily });
-      context.font = `normal normal 400px ${fontFamily}`;
+      context.font = `normal normal 400px ${cssFamily}`;
       expect(Math.abs(shaped.getLineWidth(0) - context.measureText(text).width / 10)).toBeLessThan(0.5);
     }
   });
@@ -114,9 +125,9 @@ describe('cursor positions follow joined letters (fabric.js #4815)', () => {
   });
 
   it('is an option on BoundedTextbox and survives saving', async () => {
-    const bounded = new BoundedTextbox(ARABIC, { width: 900, fontSize: 40, shaping: true });
+    const bounded = new BoundedTextbox(ARABIC, { width: 900, fontSize: 40, fontFamily: ARABIC_FONT, shaping: true });
     const context = document.createElement('canvas').getContext('2d')!;
-    context.font = 'normal normal 40px Times New Roman';
+    context.font = `normal normal 40px "${ARABIC_FONT}"`;
     expect(Math.abs(bounded.getLineWidth(0) - context.measureText(ARABIC).width)).toBeLessThan(0.5);
     const copy = (await BoundedTextbox.fromObject(bounded.toObject())) as BoundedTextbox;
     expect(copy.shaping).toBe(true);
