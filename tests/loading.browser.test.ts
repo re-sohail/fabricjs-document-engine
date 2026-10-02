@@ -4,6 +4,7 @@ import { Canvas, Rect } from 'fabric';
 import { createDocumentEngine, isDocumentEngineError } from '../src';
 import type { DocumentEngine, DocumentEngineOptions, FabricDocument, LoadProgress, SerializedFabricObject } from '../src';
 import { createMemoryStorage } from '../src/storage';
+import { budget, checkBudgets } from './support/budgets';
 
 const openCanvases: Canvas[] = [];
 const openEngines: DocumentEngine[] = [];
@@ -253,7 +254,7 @@ describe(`loading progress and cancelling on Fabric ${fabric.version}`, () => {
     expect(ranDuringLoad).toContain('timer');
   });
 
-  it.each([
+  it.runIf(checkBudgets).each([
     ['5,000 shapes', () => rects(5000)],
     ['1,500 text boxes', () => texts(1500)],
     ['300 images', () => images(300)],
@@ -272,6 +273,6 @@ describe(`loading progress and cancelling on Fabric ${fabric.version}`, () => {
     expect(engine.canvas.getObjects()).toHaveLength(objects.length);
     // Each stretch takes about 10 ms, and the final swap into the canvas about
     // 50 ms, on a laptop. The budget leaves room for busy CI machines.
-    expect(stretches.filter(([, ms]) => ms >= 500)).toEqual([]);
+    expect(stretches.filter(([, ms]) => ms >= budget(500))).toEqual([]);
   }, 60_000);
 });

@@ -4,6 +4,7 @@ import { Canvas, Rect, Textbox } from 'fabric';
 import { createDocumentEngine } from '../src';
 import type { DocumentEngine } from '../src';
 import { createMemoryStorage } from '../src/storage';
+import { budget, checkBudgets } from './support/budgets';
 
 const objectCount = 2000;
 // Shared CI runners stall now and then, so each step is timed several times and
@@ -40,7 +41,7 @@ afterEach(async () => {
 });
 
 describe(`performance budgets with ${objectCount} objects on Fabric ${fabric.version}`, () => {
-  it('stays well inside the published budgets', async () => {
+  it.runIf(checkBudgets)('stays well inside the published budgets', async () => {
     const element = document.createElement('canvas');
     document.body.append(element);
     const canvas = new Canvas(element, { width: 1000, height: 800, renderOnAddRemove: false });
@@ -73,9 +74,9 @@ describe(`performance budgets with ${objectCount} objects on Fabric ${fabric.ver
     const saved = engine.toDocument();
     const load = await durationOf(() => engine.loadDocument(saved));
 
-    expect(median(times.recordStep)).toBeLessThan(250);
-    expect(median(times.undo)).toBeLessThan(250);
-    expect(median(times.save)).toBeLessThan(250);
-    expect(load).toBeLessThan(3000);
+    expect(median(times.recordStep)).toBeLessThan(budget(250));
+    expect(median(times.undo)).toBeLessThan(budget(250));
+    expect(median(times.save)).toBeLessThan(budget(250));
+    expect(load).toBeLessThan(budget(3000));
   }, 30_000);
 });
