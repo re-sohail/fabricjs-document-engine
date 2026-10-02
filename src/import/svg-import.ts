@@ -1,4 +1,4 @@
-import { FixedLayout, Group, LayoutManager, Rect, parseSVGDocument } from 'fabric';
+import { FixedLayout, Group, LayoutManager, Rect, parseSVGDocument, util } from 'fabric';
 import type { FabricObject } from 'fabric';
 import { DocumentEngineError, isDocumentEngineError } from '../engine/errors';
 import { isSafeImageUrl } from '../security/content-limits';
@@ -24,6 +24,7 @@ export interface SvgImportOptions {
   offscreen?: 'keep' | 'drop' | 'clip';
   /** One group (the default), or separate objects. */
   as?: 'group' | 'objects';
+  preserveGroups?: boolean;
   /** Where the viewport's top-left corner lands on the canvas. Default 0, 0. */
   left?: number;
   top?: number;
@@ -163,12 +164,119 @@ function contentBounds(objects: readonly FabricObject[]): { left: number; top: n
   return Number.isFinite(left) ? { left, top, width: right - left, height: bottom - top } : { left: 0, top: 0, width: 0, height: 0 };
 }
 
+function dropBrokenUses(document: Document): void {
+  for (const use of Array.from(document.getElementsByTagName('use'))) {
+    const link = (use.getAttribute('href') ?? use.getAttributeNS(XLINK, 'href') ?? '').trim();
+    if (!link.startsWith('#') || link.length === 1 || document.getElementById(link.slice(1)) === null) use.remove();
+  }
+}
+
+const GROUP_MARK = 'data-fde-svg-group';
+function markGroups(document: Document): void {
+  for (const name of ['g', 'a']) {
+    for (const element of Array.from(document.documentElement.getElementsByTagName(name))) element.setAttribute(GROUP_MARK, '');
+  }
+}
+function svgMetadata(element: Element): { svgId?: string; svgClass?: string; svgData?: Record<string, string> } {
+  const metadata: { svgId?: string; svgClass?: string; svgData?: Record<string, string> } = {};
+  const id = element.getAttribute('id');
+  if (id) metadata.svgId = id;
+  const className = element.getAttribute('class');
+  if (className) metadata.svgClass = className;
+  for (const attribute of Array.from(element.attributes)) {
+    if (!attribute.name.startsWith('data-') || attribute.name === GROUP_MARK) continue;
+    (metadata.svgData ??= {})[attribute.name.slice(5)] = attribute.value;
+  }
+  return metadata;
+}
+
+function ownOpacity(element: Element): number {
+  const fromStyle = /(?:^|;)\s*opacity\s*:\s*([0-9.]+)/.exec(element.getAttribute('style') ?? '')?.[1];
+  const value = Number.parseFloat(fromStyle ?? element.getAttribute('opacity') ?? '1');
+  return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 1;
+}
+
+interface GroupNode {
+  element: Element;
+  children: Array<GroupNode | FabricObject>;
+}
+function rebuildGroups(objects: readonly FabricObject[], elements: readonly Element[], root: Element): FabricObject[] {
+  const top: Array<GroupNode | FabricObject> = [];
+  const nodes = new Map<Element, GroupNode>();
+  const groupNodes = new Set<GroupNode>();
+  const chains = new Map<FabricObject, Element[]>();
+  const elementOf = new Map<FabricObject, Element>();
+  objects.forEach((object, index) => {
+    const element = elements[index]!;
+    elementOf.set(object, element);
+    const chain: Element[] = [];
+    for (let parent = element.parentElement; parent && parent !== root; parent = parent.parentElement) {
+      if (parent.hasAttribute(GROUP_MARK)) chain.push(parent);
+    }
+    chains.set(object, chain);
+    let children = top;
+    for (let level = chain.length - 1; level >= 0; level -= 1) {
+      const groupElement = chain[level]!;
+      let node = nodes.get(groupElement);
+      if (!node) {
+        node = { element: groupElement, children: [] };
+        nodes.set(groupElement, node);
+        groupNodes.add(node);
+        children.push(node);
+      }
+      children = node.children;
+    }
+    children.push(object);
+    const own = element.getAttribute('id');
+    const leaf = object as FabricObject & { id?: unknown };
+    if (!own && chain.length > 0 && leaf.id !== undefined) delete leaf.id;
+    const inherited = chain.reduce((product, groupElement) => product * ownOpacity(groupElement), 1);
+    if (inherited > 0) object.opacity = Math.min(1, object.opacity / inherited);
+    object.set(svgMetadata(element));
+  });
+  const hoistClip = (node: GroupNode, group: Group): void => {
+    if (!node.element.hasAttribute('clip-path')) return;
+    let clip: FabricObject | undefined;
+    for (const object of objects) {
+      const chain = chains.get(object)!;
+      const at = chain.indexOf(node.element);
+      if (at === -1) continue;
+      const element = elementOf.get(object)!;
+      const closer = element.hasAttribute('clip-path') || chain.slice(0, at).some((between) => between.hasAttribute('clip-path'));
+      if (closer || !object.clipPath) continue;
+      if (!clip) {
+        const absolute = util.multiplyTransformMatrices(object.calcTransformMatrix(), object.clipPath.calcTransformMatrix());
+        clip = object.clipPath as FabricObject;
+        util.applyTransformToObject(clip, util.multiplyTransformMatrices(util.invertTransform(group.calcTransformMatrix()), absolute));
+      }
+      object.clipPath = undefined;
+      object.set('dirty', true);
+    }
+    if (clip) group.clipPath = clip;
+  };
+
+  const build = (item: GroupNode | FabricObject): FabricObject => {
+    if (!groupNodes.has(item as GroupNode)) return item as FabricObject;
+    const node = item as GroupNode;
+    const group = new Group(node.children.map(build));
+    group.set({ opacity: ownOpacity(node.element), ...svgMetadata(node.element) });
+    const id = node.element.getAttribute('id');
+    if (id) (group as Group & { id?: string }).id = id;
+    hoistClip(node, group);
+    group.setCoords();
+    return group;
+  };
+  return top.map(build);
+}
+
 /** Parses and places an SVG. Adding the result to a canvas is up to the caller. */
 export async function readSvg(svg: string, options: SvgImportOptions = {}, limits: ContentLimits = {}): Promise<SvgImportResult> {
   if (typeof svg !== 'string' || svg.trim().length === 0) refuse('The SVG is empty');
   const warnings: SvgImportWarning[] = [];
   const document = parse(svg);
   sanitize(document, limits, warnings);
+  dropBrokenUses(document);
+  if (options.preserveGroups) markGroups(document);
 
   let parsed: Awaited<ReturnType<typeof parseSVGDocument>>;
   try {
@@ -185,6 +293,10 @@ export async function readSvg(svg: string, options: SvgImportOptions = {}, limit
     throw new DocumentEngineError('LOAD_ABORTED', 'The SVG import was cancelled');
   }
   let objects = parsed.objects.filter((object): object is FabricObject => object !== null && object !== undefined);
+  if (options.preserveGroups) {
+    const elements = parsed.elements.filter((_, index) => parsed.objects[index] !== null && parsed.objects[index] !== undefined);
+    objects = rebuildGroups(objects, elements, document.documentElement);
+  }
 
   const declared = { width: parsed.options.width ?? 0, height: parsed.options.height ?? 0 };
   const useContent = options.viewport === 'content' || declared.width <= 0 || declared.height <= 0;

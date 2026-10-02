@@ -2,11 +2,12 @@ import { util } from 'fabric';
 import type { FabricObject, StaticCanvas } from 'fabric';
 import type { SerializedFabricObject } from '../document/document-format';
 import { yieldToEventLoop } from '../util/concurrency';
+import { enlivenPage, pickPageFields } from './page-state';
+import type { PageField } from './page-state';
 import { childrenOf, walkObjects } from './walk-objects';
 
-export interface SerializedCanvas {
+export interface SerializedCanvas extends Partial<Record<PageField, unknown>> {
   version?: string;
-  background?: unknown;
   objects: SerializedFabricObject[];
 }
 
@@ -32,7 +33,7 @@ export function serializeCanvas(canvas: StaticCanvas, propertiesToInclude: strin
   const serialized = canvas.toObject(propertiesToInclude) as SerializedCanvas;
   const objects = serialized.objects ?? [];
   keepOriginExplicit(canvas.getObjects(), objects);
-  return { version: serialized.version, background: serialized.background, objects };
+  return { version: serialized.version, ...pickPageFields(serialized), objects };
 }
 
 function countSerializedTree(root: SerializedFabricObject): number {
@@ -78,6 +79,8 @@ export function createObjects(serializedObjects: SerializedFabricObject[]): Prom
 
 export interface CanvasLoadOptions {
   signal: AbortSignal;
+  /** Called once everything is created, just before the canvas is cleared. Throw to keep the canvas as it is. */
+  beforeSwap?: () => void;
   /** How many top-level objects to create before letting the browser breathe. */
   chunkSize?: number;
   /** Called after each chunk with the number of top-level objects created so far. */
@@ -101,15 +104,14 @@ function abortError(): Error {
 export async function loadIntoCanvas(
   canvas: StaticCanvas,
   content: SerializedCanvas,
-  { signal, chunkSize = DEFAULT_LOAD_CHUNK_SIZE, onObjects }: CanvasLoadOptions,
+  { signal, chunkSize = DEFAULT_LOAD_CHUNK_SIZE, onObjects, beforeSwap }: CanvasLoadOptions,
 ): Promise<void> {
   const total = content.objects.length;
   const size = Math.max(1, Math.floor(chunkSize));
   const created: FabricObject[] = [];
-  const background = util.enlivenObjectEnlivables<Record<string, unknown>>(
-    { backgroundColor: content.background } as never,
-    { signal },
-  );
+  // The background, overlay and mask are created alongside the objects and
+  // set in the same swap, so a failure leaves all of them as they were.
+  const background = enlivenPage(content, signal);
   // Fabric rejects the background promise only after the objects; keep it from
   // being reported as unhandled while the chunks run.
   background.catch(() => undefined);
@@ -125,6 +127,7 @@ export async function loadIntoCanvas(
     }
     const enlivenedBackground = await background;
     if (signal.aborted) throw abortError();
+    beforeSwap?.();
 
     const renderOnAddRemove = canvas.renderOnAddRemove;
     canvas.renderOnAddRemove = false;

@@ -87,6 +87,10 @@ export function validateDocument(value: unknown): DocumentIssue[] {
   } else {
     if (!isPositiveNumber(value.canvas.width)) issues.push(invalid('canvas.width', 'must be a positive number'));
     if (!isPositiveNumber(value.canvas.height)) issues.push(invalid('canvas.height', 'must be a positive number'));
+    for (const field of ['backgroundImage', 'overlayImage', 'clipPath'] as const) {
+      const pageObject = value.canvas[field];
+      if (pageObject !== undefined && pageObject !== null) validateObjectList([pageObject], `canvas.${field}`, issues);
+    }
   }
 
   validateObjectList(value.objects, 'objects', issues);

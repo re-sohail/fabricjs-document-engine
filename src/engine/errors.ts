@@ -31,6 +31,8 @@ export type DocumentErrorCode =
   | 'EXPORT_FAILED'
   | 'EXPORT_ABORTED'
   | 'SVG_IMPORT_FAILED'
+  | 'LOAD_CONFLICT'
+  | 'DOCUMENT_CHANGED'
   | 'PDF_UNAVAILABLE'
   | 'PDF_FAILED'
   | 'ENGINE_DESTROYED';

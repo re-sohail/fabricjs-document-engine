@@ -74,6 +74,8 @@ That is the whole setup for a first test. localStorage is fine here; in a real a
 - **Versions and migration.** Keep named versions, restore any of them as a new revision, and open plain Fabric JSON or documents saved by older versions of this package.
 - **Large documents.** Objects are created in chunks so the page stays responsive. Loads report progress and can be cancelled with an `AbortSignal`, and a cancelled load leaves the canvas as it was.
 - **Copy, paste and layers.** A clipboard that keeps group transforms and custom properties and gives every pasted object a new id, plus bring-to-front and send-to-back commands that keep a pinned background in place. Each is one undo step.
+- **Text that behaves.** A Textbox that keeps its width and can clip, add "…" or shrink to fit; cursor positions that match Arabic and ligatures; editable vertical Chinese, Japanese and Korean text; correct typing with Android and iOS keyboards; and text edits in code that keep each letter's style.
+- **Fast with many objects.** Dirty-region rendering redraws only what changed, and image filters run in a Web Worker with progress and cancel.
 - **Undo and redo.** One user action is one undo step. Transactions group several code changes into one labelled step, and ids survive undo and redo.
 - **React ready, framework free.** Hooks for React, and a small state store for any other framework.
 - **Hardened.** Imported documents and SVG files are cleaned and size-limited, undo history has a memory budget, and every feature is tested on Fabric 6 and 7 in Chromium, Firefox and WebKit. Exports are checked pixel by pixel against the canvas.
@@ -428,6 +430,7 @@ const { objects, viewport, warnings } = await engine.importSvg(svgText, {
 - The result is one group with a fixed layout the size of the viewport, or separate objects with `as: 'objects'`. Either way it is one undo step, and every object gets an id.
 - Scripts, event handlers, `foreignObject`, links to other files and image addresses that `limits.isAllowedUrl` refuses are removed, and `warnings` says what was removed.
 - Size limits apply as for documents, so a huge or deeply nested SVG is refused with `UNSAFE_DOCUMENT`.
+- `preserveGroups: true` keeps the SVG's `<g>` groups as Fabric groups, with their ids, opacity, clip paths, classes and `data-*` attributes (Fabric flattens them).
 
 ## Version history
 
@@ -593,6 +596,64 @@ getLayers(engine); // [{ id, type, name, index, visible, locked }], top first
 
 The engine saves each object's `name`, so a layers panel keeps its labels. In React, `useLayers(engine)` from `fabricjs-document-engine/react` returns the same list and updates on every change.
 
+## Text, rendering speed and filters
+
+These fix long-standing Fabric.js issues. Each was reproduced on Fabric 6 and 7 first, and each fix is tested in Chromium, Firefox and WebKit.
+
+```ts
+import { BoundedTextbox, VerticalText, ShapedIText, attachMobileTextInput, textObjects } from 'fabricjs-document-engine/text';
+import { enableDirtyRegionRendering } from 'fabricjs-document-engine/performance';
+import { createFilterWorker } from 'fabricjs-document-engine/filters';
+import { createTextCommands } from 'fabricjs-document-engine';
+
+const engine = createDocumentEngine({ canvas, customObjects: textObjects });
+canvas.add(new BoundedTextbox(longText, { width: 240, maxHeight: 120, overflow: 'ellipsis' }));
+canvas.add(new VerticalText('縦書きのテキスト', { fontSize: 32 }));
+canvas.add(new ShapedIText('مرحبا بالعالم', { direction: 'rtl' }));
+attachMobileTextInput(canvas);
+createTextCommands(engine).insertText(title, 0, 'New: ');
+enableDirtyRegionRendering(canvas);
+await createFilterWorker({ engine }).apply(image, [new filters.Blur({ blur: 0.2 })], { onProgress });
+```
+
+- **`BoundedTextbox` (#2376).** Fabric widens a Textbox to its longest word. This one breaks such a word between letters, as CSS `overflow-wrap: anywhere` does. With `maxHeight`, extra lines are clipped or end in "…", or `fit: 'shrink'` makes the font smaller until the text fits. The saved font size does not change.
+- **`ShapedIText` and `ShapedTextbox` (#4815).** Fabric measures each letter alone but draws joined letters, so in Arabic the cursor can land two letters away. These measure from the text as the browser shapes it.
+- **`VerticalText` (#511).** Columns from right to left, upright CJK characters, turned Latin words (Unicode UAX #50), and two-digit numbers side by side. Arrow keys, selection, IME, SVG and PDF all work.
+- **`attachMobileTextInput` (#6588).** Reads each edit from the text itself, so Android autocorrect, suggestions and cursor swipes put letters and styles in the right place. It also opens the keyboard on tap and stops iOS from zooming.
+- **`createTextCommands` (#6133).** Insert, delete, replace and restyle text from code with styles that stay on their letters, one undo step each.
+- **`enableDirtyRegionRendering` (#9847).** Moving one of 5,000 shapes draws about 25 of them instead of all 5,000: under 2 ms per frame in place of nearly a second in headless Chromium.
+- **`createFilterWorker` (#9532).** Fabric's filters run in a worker on transferred bitmaps, with the same pixels as Fabric, progress, cancel, and only the newest run applied while a slider moves.
+
+## Edits that are never lost
+
+These guarantees hold however the user and your code interleave work:
+
+```ts
+// Page settings are one undo step and count as unsaved work
+engine.setPage({ width: 1080, height: 1080, background: '#fff8e7' }, 'Square post');
+
+// All or nothing: a failure leaves the canvas as it was
+await engine.transaction('Apply template', async () => {
+  await addTemplateObjects(engine.canvas);
+}, { rollback: true });
+
+// A load refuses to overwrite edits made while it ran
+try {
+  await engine.load('poster-42');
+} catch (error) {
+  if (isDocumentEngineError(error) && error.code === 'LOAD_CONFLICT') askBeforeReplacing();
+}
+```
+
+- **The whole page is saved.** Background images, overlays and a mask on the canvas (`canvas.backgroundImage`, `overlayImage`, `clipPath`) are saved, reopened, checked for missing images and kept in versions and recovery copies.
+- **Page changes are undoable.** `setPage` changes the size, background, overlay or mask as one undo step, and changes made to the canvas inside a `transaction` count too.
+- **Typing counts at once.** Each keystroke marks the document unsaved and feeds autosave and recovery, while the whole edit stays one undo step.
+- **Loads keep edits.** If the canvas is edited while a document loads, the load stops with `LOAD_CONFLICT` and the edits stay, unless you pass `discardUnsavedChanges: true`.
+- **Async work stays in its document.** An SVG import, image replacement or paste that finishes after another document was opened is dropped with `DOCUMENT_CHANGED`, instead of landing in the wrong document.
+- **Each tab has its own recovery copy.** Two tabs editing the same document no longer overwrite each other's copy, and a save removes only the copy it covers.
+- **Sizes are checked before drawing.** Pages, exports and images over the browser's canvas limits are refused before any canvas is made, so a huge file cannot crash the tab. Limits are set with `limits`.
+- **Rollback when you want it.** `transaction(label, work, { rollback: true })` undoes everything `work` changed when it fails.
+
 ## Document format
 
 ```ts
@@ -603,7 +664,15 @@ interface FabricDocument {
   updatedAt: string;
   revision?: number;
   fabricVersion?: string;
-  canvas: { width: number; height: number; background?: unknown };
+  canvas: {
+    width: number;
+    height: number;
+    background?: unknown;       // color, gradient or pattern
+    backgroundImage?: object;   // Fabric image behind every object
+    overlay?: unknown;          // color drawn over every object
+    overlayImage?: object;      // Fabric image over every object
+    clipPath?: object;          // mask for the whole canvas
+  };
   objects: SerializedFabricObject[];
   assets?: {
     images: Array<{ url: string; objectIds: string[] }>;

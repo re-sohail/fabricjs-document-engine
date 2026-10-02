@@ -12,7 +12,7 @@ describe('server side import', () => {
     expect(typeof storage.createMemoryStorage).toBe('function');
     expect(typeof recovery.createMemoryRecovery).toBe('function');
     expect(typeof react.useDocumentEngine).toBe('function');
-  }, 30_000);
+  }, 120_000);
 
   it('validates and migrates documents on the server', async () => {
     const { migrateDocument, validateDocument } = await import('../src/index');

@@ -25,6 +25,12 @@ export interface SvgExportOptions {
    */
   textOnPath?: 'vector' | 'fabric';
   /**
+   * How underlines, overlines and line-throughs of ordinary text are written.
+   * `shapes` (the default) draws them where the canvas does; `css` keeps
+   * Fabric's `text-decoration`, which readers place in their own way.
+   */
+  textDecorations?: 'shapes' | 'css';
+  /**
    * Puts every image into the file as data, so the SVG opens anywhere
    * without the original image URLs. `require` blocks the export when an
    * image cannot be embedded; `true` exports anyway with a warning.
@@ -50,6 +56,7 @@ export interface ExportOptions {
 
 export interface NormalizedSvgOptions {
   textOnPath: 'vector' | 'fabric';
+  textDecorations: 'shapes' | 'css';
   embedImages: boolean | 'require';
   maxEmbeddedImageBytes: number;
   embedFonts: Record<string, FontSource>;
@@ -103,6 +110,8 @@ export function normalizeExportOptions(options: ExportOptions): NormalizedExport
   const svg = options.svg ?? {};
   const textOnPath = svg.textOnPath ?? 'vector';
   if (textOnPath !== 'vector' && textOnPath !== 'fabric') throw invalid('svg.textOnPath must be "vector" or "fabric"');
+  const textDecorations = svg.textDecorations ?? 'shapes';
+  if (textDecorations !== 'shapes' && textDecorations !== 'css') throw invalid('svg.textDecorations must be "shapes" or "css"');
   const embedImages = svg.embedImages ?? false;
   if (embedImages !== true && embedImages !== false && embedImages !== 'require') {
     throw invalid('svg.embedImages must be true, false or "require"');
@@ -120,6 +129,6 @@ export function normalizeExportOptions(options: ExportOptions): NormalizedExport
     padding,
     background: options.background ?? 'keep',
     signal: options.signal,
-    svg: { textOnPath, embedImages, maxEmbeddedImageBytes, embedFonts },
+    svg: { textOnPath, textDecorations, embedImages, maxEmbeddedImageBytes, embedFonts },
   };
 }

@@ -101,9 +101,57 @@ In hybrid mode, objects PDF vectors cannot draw, such as shadows and blend modes
 
 Use `renderDocuments` rather than one canvas per document. It reuses a few canvases and frees each document's objects and cache canvases. Keep `concurrency` low (the default is 2), and upload each result as it arrives rather than collecting them all.
 
+## Loading fails with LOAD_CONFLICT
+
+The canvas was edited while the document loaded, for example by a click or by code that added objects. The load stopped so those edits are not lost. Ask the user, then load again with `{ discardUnsavedChanges: true }` to replace them, or disable editing while a load runs.
+
+## An import, paste or image change fails with DOCUMENT_CHANGED
+
+It was still running when another document was opened, so its result was dropped instead of landing in the wrong document. Run it again in the document that is open now.
+
+## The background image or overlay is gone after reopening
+
+Documents saved before 1.2 did not keep canvas-level images, overlays or masks. Save the document again with 1.2 or later; from then on `canvas.backgroundImage`, `overlayImage` and `clipPath` are kept.
+
+## Two tabs show different recovery copies
+
+Since 1.2 each tab keeps its own copy of unsaved work. `getRecoverableDocuments()` lists every copy with its `sessionId`, and `active` tells you whether that tab is still open. Restore one with `restoreRecovery(id, { sessionId })`, or discard one with `discardRecovery(id, sessionId)`.
+
+## A large export or document is refused with TOO_LARGE or UNSAFE_DOCUMENT
+
+The page, export or image is bigger than what browsers can draw (by default 16,384 pixels per side and 67 million pixels in all, the iOS 18 Safari limit). Lower the export `scale`, export a smaller `area`, or raise `limits.maxCanvasPixels` if you only target desktop browsers.
+
 ## A JPEG export has a black background
 
 It should not. The engine uses white when the background is empty or transparent. If you still see black, you set `background` to a dark color.
+
+## A Textbox grows wider than I set it
+
+Fabric widens a Textbox to its longest word. Use `BoundedTextbox` from `fabricjs-document-engine/text`, which breaks long words between letters. Add `maxHeight` with `overflow` or `fit: 'shrink'` to keep the height too.
+
+## The cursor is in the wrong place in Arabic or with ligatures
+
+Fabric measures letters one by one but draws them joined. Use `ShapedIText` or `ShapedTextbox`, or `shaping: true` on a `BoundedTextbox`. Text with letter spacing or `justify` is drawn letter by letter and is already measured right.
+
+## Typing on Android puts letters or styles in the wrong place
+
+Call `attachMobileTextInput(canvas)` before editing starts. It reads each keyboard edit from the text, so autocorrect, suggestions and cursor swipes work.
+
+## Styles move to the wrong letters when I change text in code
+
+Setting `text` does not move styles. Use `createTextCommands(engine)` or `replaceTextRange`.
+
+## An imported SVG lost its groups
+
+Pass `preserveGroups: true` to `importSvg`. Group ids, classes and `data-*` attributes are on `svgId`, `svgClass` and `svgData`.
+
+## Applying a filter freezes the page
+
+Use `createFilterWorker()` from `fabricjs-document-engine/filters`. If `mode` is `'main-thread'`, the browser has no module workers or `OffscreenCanvas`, or the CommonJS build is in use; pass `createWorker` with your bundler's worker setup.
+
+## Dragging is slow with many objects
+
+Call `enableDirtyRegionRendering(canvas)` from `fabricjs-document-engine/performance`. If a custom object changes inside its own `_render` without changing any property, call `invalidate()` after the change.
 
 ## Saves fail with SAVE_CONFLICT
 

@@ -105,18 +105,69 @@ describe('recovery controller', () => {
     expect((await controller.list()).map((record) => record.documentId)).toEqual(['new', 'old']);
   });
 
-  it('remembers a load until it finishes', async () => {
-    const { controller } = createHarness();
-    await controller.markLoadStarted('doc');
+  it('reports a load another session never finished, until a later load finishes', async () => {
+    // Without Web Locks every other session counts as closed, which is what
+    // a crashed tab looks like. The browser tests cover the locks.
+    vi.stubGlobal('navigator', {});
+    const crashed = createHarness();
+    await crashed.controller.markLoadStarted('doc');
+    // The session's own load in progress is not an interruption.
+    expect(await crashed.controller.interruptedLoad()).toBeUndefined();
+    crashed.controller.destroy();
+
+    const { controller } = createHarness(crashed.store);
     expect(await controller.interruptedLoad()).toMatchObject({ documentId: 'doc' });
+    await controller.markLoadStarted('next');
     await controller.markLoadFinished();
     expect(await controller.interruptedLoad()).toBeUndefined();
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps one copy per session and removes only what a save covers', async () => {
+    const store = createMemoryRecovery();
+    const first = createHarness(store);
+    const second = createHarness(store);
+    first.setContent('from first');
+    second.setContent('from second');
+    await first.controller.flush();
+    await second.controller.flush();
+    const copies = await first.controller.list();
+    expect(copies.map((copy) => copy.document.metadata.content).sort()).toEqual(['from first', 'from second']);
+    expect(new Set(copies.map((copy) => copy.sessionId)).size).toBe(2);
+
+    await first.controller.remove('doc');
+    expect((await first.controller.list()).map((copy) => copy.document.metadata.content)).toEqual(['from second']);
+
+    first.controller.adopt('doc', second.controller.sessionId);
+    await first.controller.remove('doc');
+    expect(await first.controller.list()).toEqual([]);
+  });
+
+  it('still reads and removes copies written before sessions existed', async () => {
+    const store = createMemoryRecovery();
+    const { controller } = createHarness(store);
+    await store.set('document:doc', { documentId: 'doc', savedAt: '2026-01-01T00:00:00.000Z', baseRevision: 1, document: { id: 'doc' }, files: {} });
+    expect(await controller.read('doc')).toMatchObject({ sessionId: 'legacy', active: false });
+    await controller.remove('doc');
+    expect(await store.keys()).toEqual([]);
+  });
+
+  it('keeps document ids with any characters apart', async () => {
+    const { controller, store } = createHarness();
+    await store.set(`checkpoint:other:${encodeURIComponent('a:b/c d')}`, {
+      documentId: 'a:b/c d',
+      savedAt: '2026-01-01T00:00:00.000Z',
+      baseRevision: 0,
+      document: { id: 'a:b/c d' },
+      files: {},
+    });
+    expect((await controller.list()).map((copy) => [copy.documentId, copy.sessionId])).toEqual([['a:b/c d', 'other']]);
   });
 
   it('writes an emergency copy at once when the page is closing', async () => {
     const { controller, store } = createHarness();
     window.dispatchEvent(new Event('pagehide'));
-    expect(await store.keys()).toEqual(['unload:doc']);
+    expect(await store.keys()).toEqual([`closing:${controller.sessionId}:doc`]);
     expect((await controller.read('doc'))?.document.metadata.content).toBe('first');
     controller.destroy();
   });

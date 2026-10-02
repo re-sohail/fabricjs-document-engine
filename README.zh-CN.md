@@ -74,6 +74,8 @@ await engine.loadDocument(JSON.parse(localStorage.getItem(document.id)!));
 - **版本和迁移。** 保存命名版本，把任意版本恢复为新的修订，还能打开纯 Fabric JSON 或旧版本这个包保存的文档。
 - **大文档。** 对象分批创建，页面保持响应。加载会报告进度，并能用 `AbortSignal` 取消；取消后画布保持原样。
 - **复制、粘贴和图层。** 剪贴板会保留编组的变换和自定义属性，并给每个粘贴出的对象一个新 id；置顶、置底等图层命令可以让固定的背景保持不动。每个操作都是一步撤销。
+- **好用的文字。** 保持宽度、可以裁剪、加“…”或自动缩小字号的文本框；与阿拉伯文和连字一致的光标位置；可编辑的中日韩竖排文字；在 Android 和 iOS 键盘上正确输入；在代码里修改文字时每个字的样式保持不变。
+- **对象多也流畅。** 脏区域渲染只重绘变化的部分，图片滤镜在 Web Worker 中运行，支持进度和取消。
 - **撤销和重做。** 用户的一次操作就是一步撤销。事务可以把代码里的多处改动合成一个带标签的步骤，撤销和重做后 id 保持不变。
 - **支持 React，不绑定框架。** 为 React 提供 hooks，为其他框架提供一个小的状态 store。
 - **经过加固。** 导入的文档和 SVG 文件会被清理并限制大小，撤销历史有内存上限，每个功能都在 Fabric 6 和 7、Chromium、Firefox 和 WebKit 中测试过。导出结果会和画布逐像素比对。
@@ -428,6 +430,7 @@ const { objects, viewport, warnings } = await engine.importSvg(svgText, {
 - 结果是一个固定布局、大小等于视口的编组；使用 `as: 'objects'` 时则是分开的对象。两种方式都只算一步撤销，每个对象都有 id。
 - 脚本、事件处理器、`foreignObject`、指向其他文件的链接，以及 `limits.isAllowedUrl` 拒绝的图片地址都会被移除，`warnings` 会说明移除了什么。
 - 大小限制和文档相同，过大或嵌套过深的 SVG 会以 `UNSAFE_DOCUMENT` 被拒绝。
+- 使用 `preserveGroups: true` 时，SVG 的 `<g>` 编组会保留为 Fabric 编组，连同 id、透明度、裁剪路径、class 和 `data-*` 属性（Fabric 自己会把它们拍平）。
 
 ## 版本历史
 
@@ -593,6 +596,65 @@ getLayers(engine); // [{ id, type, name, index, visible, locked }], top first
 
 引擎会保存每个对象的 `name`，所以图层面板的名称不会丢。在 React 中，`fabricjs-document-engine/react` 的 `useLayers(engine)` 返回同样的列表，并在每次改动后更新。
 
+## 文字、渲染速度和滤镜
+
+这些功能修复了 Fabric.js 中长期存在的问题。每个问题都先在 Fabric 6 和 7 上复现，每个修复都在 Chromium、Firefox 和 WebKit 中测试过。
+
+```ts
+import { BoundedTextbox, VerticalText, ShapedIText, attachMobileTextInput, textObjects } from 'fabricjs-document-engine/text';
+import { enableDirtyRegionRendering } from 'fabricjs-document-engine/performance';
+import { createFilterWorker } from 'fabricjs-document-engine/filters';
+import { createTextCommands } from 'fabricjs-document-engine';
+
+const engine = createDocumentEngine({ canvas, customObjects: textObjects });
+
+canvas.add(new BoundedTextbox(longText, { width: 240, maxHeight: 120, overflow: 'ellipsis' }));
+canvas.add(new VerticalText('縦書きのテキスト', { fontSize: 32 }));
+canvas.add(new ShapedIText('مرحبا بالعالم', { direction: 'rtl' }));
+attachMobileTextInput(canvas);
+createTextCommands(engine).insertText(title, 0, 'New: ');
+enableDirtyRegionRendering(canvas);
+await createFilterWorker({ engine }).apply(image, [new filters.Blur({ blur: 0.2 })], { onProgress });
+```
+
+- **`BoundedTextbox`（#2376）。** Fabric 会把文本框撑到最长单词的宽度。它会像 CSS `overflow-wrap: anywhere` 一样在字母之间断开过长的单词。设置 `maxHeight` 后，多出的行可以被裁剪或以“…”结尾，或者用 `fit: 'shrink'` 缩小字号直到放得下。保存的字号不会改变。
+- **`ShapedIText` 和 `ShapedTextbox`（#4815）。** Fabric 单独测量每个字母，但绘制时字母是连在一起的，所以阿拉伯文的光标可能偏两个字母。它们按浏览器实际排版的文字来测量。
+- **`VerticalText`（#511）。** 从右到左的列，直立的中日韩字符，旋转的拉丁单词（Unicode UAX #50），两位数字并排放在一个方格里。方向键、选择、输入法、SVG 和 PDF 都可以使用。
+- **`attachMobileTextInput`（#6588）。** 从文字本身读取每次修改，所以 Android 的自动更正、联想和光标滑动都会把文字和样式放在正确的位置。它还会在点击时打开键盘，并防止 iOS 缩放页面。
+- **`createTextCommands`（#6133）。** 在代码中插入、删除、替换文字和修改样式，样式跟着字母走，每次一步撤销。
+- **`enableDirtyRegionRendering`（#9847）。** 在 5,000 个图形中移动一个时，只绘制大约 25 个，而不是全部 5,000 个：在无头 Chromium 中每帧不到 2 毫秒，原来接近一秒。
+- **`createFilterWorker`（#9532）。** Fabric 的滤镜在 Worker 中处理转移过去的位图，像素和 Fabric 相同，支持进度和取消，拖动滑块时只应用最新的一次。
+
+## 不会丢失的修改
+
+无论用户的操作和你的代码怎样交错，下面这些保证都成立：
+
+```ts
+// Page settings are one undo step and count as unsaved work
+engine.setPage({ width: 1080, height: 1080, background: '#fff8e7' }, 'Square post');
+
+// All or nothing: a failure leaves the canvas as it was
+await engine.transaction('Apply template', async () => {
+  await addTemplateObjects(engine.canvas);
+}, { rollback: true });
+
+// A load refuses to overwrite edits made while it ran
+try {
+  await engine.load('poster-42');
+} catch (error) {
+  if (isDocumentEngineError(error) && error.code === 'LOAD_CONFLICT') askBeforeReplacing();
+}
+```
+
+- **整个页面都会保存。** 画布上的背景图片、叠加层和蒙版（`canvas.backgroundImage`、`overlayImage`、`clipPath`）会被保存、重新打开、检查缺失图片，也会进入版本和恢复副本。
+- **页面修改可以撤销。** `setPage` 修改尺寸、背景、叠加层或蒙版，只算一步撤销；在 `transaction` 里直接修改画布也会被记录。
+- **输入立即算作修改。** 每次按键都会把文档标记为未保存，并触发自动保存和恢复副本，而整次编辑仍然只算一步撤销。
+- **加载不会覆盖修改。** 如果文档加载期间画布被修改，加载会以 `LOAD_CONFLICT` 停止并保留这些修改，除非传入 `discardUnsavedChanges: true`。
+- **异步操作留在原来的文档里。** 在打开另一份文档之后才完成的 SVG 导入、图片替换或粘贴会以 `DOCUMENT_CHANGED` 被丢弃，而不会落到错误的文档里。
+- **每个标签页有自己的恢复副本。** 两个标签页编辑同一份文档时不再互相覆盖副本，保存时只删除它覆盖的那一份。
+- **绘制前先检查尺寸。** 超过浏览器画布限制的页面、导出和图片，会在创建任何画布之前被拒绝，大文件不会让标签页崩溃。限制用 `limits` 设置。
+- **需要时可以回滚。** `transaction(label, work, { rollback: true })` 在 `work` 失败时撤回它做的所有修改。
+
 ## 文档格式
 
 ```ts
@@ -603,7 +665,15 @@ interface FabricDocument {
   updatedAt: string;
   revision?: number;
   fabricVersion?: string;
-  canvas: { width: number; height: number; background?: unknown };
+  canvas: {
+    width: number;
+    height: number;
+    background?: unknown;       // color, gradient or pattern
+    backgroundImage?: object;   // Fabric image behind every object
+    overlay?: unknown;          // color drawn over every object
+    overlayImage?: object;      // Fabric image over every object
+    clipPath?: object;          // mask for the whole canvas
+  };
   objects: SerializedFabricObject[];
   assets?: {
     images: Array<{ url: string; objectIds: string[] }>;

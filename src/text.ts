@@ -1,0 +1,10 @@
+export { BoundedTextbox } from './text/bounded-textbox';
+export type { BoundedTextboxProps, BreakWords, TextFit, TextOverflow } from './text/bounded-textbox';
+export { registerTextObjects, textObjects } from './text/register';
+export { ShapedIText, ShapedTextbox, drawsJoinedRuns, shapeLine, shapeWord } from './text/shaping';
+export type { AnyText } from './text/shaping';
+export { attachMobileTextInput, findTextEdit } from './text/mobile-input';
+export type { MobileTextInput, MobileTextInputOptions } from './text/mobile-input';
+export { VerticalText } from './text/vertical-text';
+export type { CombineUpright, TextOrientation, VerticalTextProps } from './text/vertical-text';
+export { Orientation, orientationOf, orientationOfCodePoint } from './text/vertical-orientation';

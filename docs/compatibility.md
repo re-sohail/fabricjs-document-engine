@@ -14,6 +14,8 @@ These results come from version 0.8.0. Every release runs the same suite before 
 - Plain Fabric JSON from Fabric 5 opens through the migration step. Fabric 6 and 7 still accept Fabric 5's legacy type names.
 - **WebKit note.** WebKit cannot store `Blob` values in IndexedDB, so recovery copies keep image data as bytes and turn it back into a `Blob` when read.
 - React 18 and 19 are supported through `fabricjs-document-engine/react`. The core never imports React.
+- `fabricjs-document-engine/filters` runs filters in a module worker with `OffscreenCanvas` (Chrome 80, Firefox 114, Safari 16.4 and later). Elsewhere, and from the CommonJS build, filters run in steps on the main thread.
+- `ShapedIText` and `ShapedTextbox` use the browser's own shaping through `measureText`, so results follow the fonts installed.
 
 ## Performance targets
 
@@ -31,6 +33,17 @@ These are measured with 5,000 objects: 60% rectangles, 20% circles, 10% text box
 Export time is almost all Fabric's own rendering plus the browser's image encoder, shown as "Fabric alone" below. The engine adds its preflight check on top.
 
 A regression test runs 2,000 objects in every browser project with generous budgets, so large slowdowns fail the build.
+
+## Dirty-region rendering
+
+The median time of one frame while dragging one rectangle on a 1,200 × 800 canvas, measured in the test browsers (headless, software drawing), version 1.3.0:
+
+| Objects | Chromium: Fabric / dirty regions | Firefox: Fabric / dirty regions | WebKit: Fabric / dirty regions |
+| --- | --- | --- | --- |
+| 1,000 | 178 ms / 0.4 ms | 151 ms / 1 ms | 1 ms / 0 ms |
+| 5,000 | 987 ms / 1.7 ms | 814 ms / 2 ms | 10 ms / 3 ms |
+
+With dirty regions, about 25 objects are drawn per frame instead of 5,000. The remaining time is the pass that compares every object with the last frame.
 
 ## Measurements
 
@@ -93,6 +106,10 @@ Measured on an Apple Silicon Mac with headless Playwright browsers, with the can
 - Loading creates objects 100 at a time and gives the page a turn between chunks. Images are checked six at a time, each for at most 30 seconds.
 - `renderDocuments` keeps `concurrency` off-screen canvases (2) and frees each document's objects, Fabric cache canvases and export canvases after it.
 
+## Size limits
+
+Every page, raster export and decoded image is checked against `limits` before a canvas is created: 16,384 pixels per side and 67,108,864 pixels in all by default. That is the area iOS 18 Safari can draw (older iOS: 16,777,216; Chrome: 268,435,456; Firefox: 472,907,776). PDF pages and pictures in a PDF are drawn at a lower resolution instead of failing.
+
 ## Fabric behaviour the engine works around
 
 These were reproduced on Fabric 6.9.1 and 7.4.0, and the tests guard each workaround. If a later Fabric release fixes one, the workaround can be removed.
@@ -111,3 +128,6 @@ These were reproduced on Fabric 6.9.1 and 7.4.0, and the tests guard each workar
 | `util.groupSVGElements` moves SVG artwork when elements lie outside the viewBox | [#10916](https://github.com/fabricjs/fabric.js/issues/10916) | `importSvg` keeps the SVG's viewport. |
 | No PDF export | [#5906](https://github.com/fabricjs/fabric.js/issues/5906) | `fabricjs-document-engine/pdf`. |
 | `dispose()` does not free canvas memory in browsers | [#4848](https://github.com/fabricjs/fabric.js/issues/4848) | `renderDocuments` and exports release canvas pixels themselves. |
+| Inverted clip paths are written to SVG as ordinary clip paths | [#10460](https://github.com/fabricjs/fabric.js/issues/10460) | SVG export writes them as masks. |
+| A clip path with its own clip path makes `toSVG()` throw (Fabric 7) or write `url(#undefined)` (Fabric 6) | [#10460](https://github.com/fabricjs/fabric.js/issues/10460) | The object is drawn as a picture, with `CLIP_PATH_RASTERIZED`. |
+| Overlines and other decorations of ordinary text land away from the canvas in SVG; Fabric 6 shifts raised letters twice | [#10645](https://github.com/fabricjs/fabric.js/issues/10645) | SVG export draws decorations as shapes where the canvas does. |

@@ -1,5 +1,41 @@
 # fabricjs-document-engine
 
+## 1.3.0
+
+### Minor Changes
+
+- Fixes for eight long-open Fabric.js issues, each reproduced first on Fabric 6 and 7 and tested in Chromium, Firefox and WebKit.
+  
+  - **Text edits keep styles (#6133).** New `createTextCommands(engine)` with `insertText`, `deleteText`, `replaceText` and `setTextStyle`, plus `replaceTextRange` and `setTextRangeStyle`. Styles move with their letters as runs (O(runs) per edit), the cursor and hidden textarea stay in step while typing, `text:changed` fires, and each command is one undo step.
+  - **Textboxes keep their width (#2376).** New `BoundedTextbox` in `fabricjs-document-engine/text` breaks words wider than the box between letters, and can stop at `maxHeight` with `overflow: 'clip' | 'ellipsis'` or `fit: 'shrink'` (binary search over half points; the saved font size is unchanged).
+  - **Cursor follows joined letters (#4815).** New `ShapedIText` and `ShapedTextbox` measure positions from the text as the browser shapes it, so the cursor, selection and clicks match Arabic and ligatures. `BoundedTextbox` has a `shaping` option.
+  - **Phone keyboards (#6588).** New `attachMobileTextInput(canvas)` reads each keyboard edit from the text itself, so Android autocorrect, suggestions, keyCode 229 backspace and space-bar cursor swipes put text and styles in the right place. It opens the keyboard from the tap, stops iOS zoom and keeps the textarea at the cursor.
+  - **Vertical text (#511).** New editable `VerticalText` for Chinese, Japanese and Korean, with UAX #50 orientation, `combineUpright: 'digits2'`, arrow keys along and across columns, and SVG and PDF export.
+  - **SVG groups (#899).** `importSvg(svg, { preserveGroups: true })` rebuilds `<g>` and `<a>` as groups with their id, opacity, clip path, class and `data-*` attributes (`svgId`, `svgClass`, `svgData`, saved with the document). A `<use>` that points nowhere no longer stops the `<use>` elements after it.
+  - **Filters off the main thread (#9532).** New `createFilterWorker()` in `fabricjs-document-engine/filters` runs Fabric's filters in a worker with transferred bitmaps, progress, cancel and newest-run-wins, with the same pixels as Fabric's 2D backend. Without workers it runs in steps on the main thread.
+  - **Faster rendering (#9847).** New `enableDirtyRegionRendering(canvas)` in `fabricjs-document-engine/performance` redraws only what changed: moving one of 2,000 shapes draws a few dozen instead of 2,000. Also `createPerformanceMonitor`, `batchCanvasUpdates` and `createSpatialIndex`.
+
+## 1.2.0
+
+### Minor Changes
+
+- Document reliability: nothing the user does is lost, misplaced or left half done.
+  
+  - **Canvas-level content is saved.** `canvas.backgroundImage`, `overlay`, `overlayImage` and `clipPath` are now saved, reopened, migrated from plain Fabric JSON, checked for missing images, and kept in versions and recovery copies. Before, they disappeared after reopening.
+  - **Page changes are undoable.** New `engine.setPage({ width, height, background, backgroundImage, overlay, overlayImage, clipPath }, label)` records one undo step and marks the document unsaved. History snapshots now include the page as one more entry, so page changes made inside any transaction are recorded too.
+  - **Typing counts at once.** `text:changed` now marks the document unsaved and schedules autosave and recovery on every keystroke; the edit is still one undo step.
+  - **Loads keep edits.** A load compares a change counter before it replaces the canvas. If the canvas was edited meanwhile, it stops with the new `LOAD_CONFLICT` code and keeps the edits, unless `discardUnsavedChanges: true` is passed.
+  - **Async work stays in its document.** `getDocumentInfo().session` goes up whenever the canvas shows another document. `importSvg`, `replaceImage`, clipboard `paste` and undo/redo check it after every wait, and drop their result with the new `DOCUMENT_CHANGED` code instead of changing another document.
+  - **One recovery copy per tab.** Recovery copies are kept per session and document, so two tabs no longer overwrite each other. `RecoveryRecord` gains `sessionId` and `active` (another tab still open, via the Web Locks API); `getRecovery`, `restoreRecovery` and `discardRecovery` take a session; a save removes only the copies it covers. Copies written by earlier versions are still read.
+  - **Size limits.** `limits.maxCanvasSide`, `maxCanvasPixels`, `maxImagePixels` and `maxDocumentLength`, with defaults matching what iOS 18 Safari can draw, are checked before any canvas is made. Oversized documents are refused with `UNSAFE_DOCUMENT`, raster exports with `EXPORT_BLOCKED` and a `TOO_LARGE` problem, images with the failure reason `TOO_LARGE`; PDF pages are drawn at a lower resolution instead.
+  - **Rollback.** `transaction(label, work, { rollback: true })` puts the canvas back when `work` throws or rejects, with no undo step and no unsaved change.
+  - **SVG clip paths and decorations.** Inverted clip paths are written as SVG masks. Objects with nested clip paths, which make Fabric 7's `toSVG()` throw, are drawn as pictures with a `CLIP_PATH_RASTERIZED` warning. Underlines, overlines and line-throughs of ordinary text are drawn as shapes where the canvas draws them (`svg.textDecorations: 'css'` keeps Fabric's output), which also fixes letters raised with `deltaY` on Fabric 6. Pixel tests compare every case with the canvas on Fabric 6 and 7.
+
+### Patch Changes
+
+- Load progress now reaches the screen. Between chunks of objects the engine yielded with `scheduler.yield()`, which in Chromium resumes ahead of other queued work, so a React or Vue progress bar fed by `onProgress` only re-rendered once the load had finished, and a Cancel button enabled from progress could never be pressed. The engine now yields with a message-channel task, which lets queued work such as a framework's re-render run first, without the delay of `setTimeout`.
+
+
 ## 1.1.0
 
 ### Minor Changes

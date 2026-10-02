@@ -33,6 +33,10 @@ for (const file of filesIn('dist')) {
   if (isPdfFile && staticPdfImport.test(source)) problems.push(`${file} imports jspdf or svg2pdf.js up front; it must load them only when a PDF is made`);
 }
 
+for (const file of filesIn('dist')) {
+  if (file.endsWith('.cjs') && /require\(["']url["']\)/.test(readFileSync(file, 'utf8'))) problems.push(`${file} requires Node's url module, which browser bundles do not have`);
+}
+
 if (problems.length > 0) {
   console.error(problems.join('\n'));
   process.exit(1);

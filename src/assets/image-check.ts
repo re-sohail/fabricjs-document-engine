@@ -11,7 +11,7 @@ export interface ImageToCheck {
  * a server on another site that sends no CORS headers looks the same as a
  * network failure unless the image asked for CORS.
  */
-export type ImageFailureReason = 'NOT_FOUND' | 'HTTP_ERROR' | 'CORS' | 'NETWORK' | 'TIMEOUT' | 'DECODE' | 'ABORTED';
+export type ImageFailureReason = 'NOT_FOUND' | 'HTTP_ERROR' | 'CORS' | 'NETWORK' | 'TIMEOUT' | 'DECODE' | 'ABORTED' | 'TOO_LARGE';
 
 export interface ImageLoadFailure {
   url: string;
@@ -28,6 +28,8 @@ export interface ImageCheckOptions {
   timeoutMs?: number;
   /** How many images load at the same time. */
   concurrency?: number;
+  /** Largest decoded image allowed, in pixels. Larger images fail with `TOO_LARGE`. */
+  maxPixels?: number;
   /** Called after each image finishes, loaded or not. */
   onProgress?: (done: number, total: number) => void;
 }
@@ -121,7 +123,12 @@ async function explainFailure(image: ImageToCheck, signal: AbortSignal): Promise
   return failure(url, 'NETWORK', 'could not be reached. Check the URL and the network connection.');
 }
 
-async function checkImage(image: ImageToCheck, signal: AbortSignal, timeoutMs: number): Promise<ImageLoadFailure | undefined> {
+async function checkImage(
+  image: ImageToCheck,
+  signal: AbortSignal,
+  timeoutMs: number,
+  maxPixels: number,
+): Promise<ImageLoadFailure | undefined> {
   const attempt = new AbortController();
   let timedOut = false;
   const stop = (): void => attempt.abort();
@@ -135,7 +142,16 @@ async function checkImage(image: ImageToCheck, signal: AbortSignal, timeoutMs: n
       : undefined;
   try {
     if (signal.aborted) attempt.abort();
-    await util.loadImage(image.url, { signal: attempt.signal, crossOrigin: (image.crossOrigin ?? null) as never });
+    const element = await util.loadImage(image.url, { signal: attempt.signal, crossOrigin: (image.crossOrigin ?? null) as never });
+    // The decoded size is known once the image loads, before Fabric draws it anywhere.
+    const pixels = element.naturalWidth * element.naturalHeight;
+    if (pixels > maxPixels) {
+      return failure(
+        image.url,
+        'TOO_LARGE',
+        `is ${element.naturalWidth} × ${element.naturalHeight} pixels, more than the limit of ${maxPixels}`,
+      );
+    }
     return undefined;
   } catch {
     if (timedOut) {
@@ -159,7 +175,7 @@ export async function findMissingImages(
   let done = 0;
   options.onProgress?.(0, images.length);
   const results = await mapWithConcurrency(images, options.concurrency ?? DEFAULT_IMAGE_CONCURRENCY, async (image) => {
-    const result = await checkImage(image, signal, timeoutMs);
+    const result = await checkImage(image, signal, timeoutMs, options.maxPixels ?? Infinity);
     done += 1;
     options.onProgress?.(done, images.length);
     return result;

@@ -9,6 +9,8 @@ export type {
   LoadOptions,
   LoadProgress,
   LoadStage,
+  PageChanges,
+  RestoreRecoveryOptions,
 } from './engine/create-document-engine';
 export { DocumentEngineError, createConflictError, isDocumentEngineError } from './engine/errors';
 export type { DocumentErrorCode, DocumentIssue, DocumentEngineErrorDetails } from './engine/errors';
@@ -23,7 +25,7 @@ export type {
 export type { NewDocumentOptions } from './document/create-document';
 export { validateDocument } from './document/validate-document';
 export type { CustomObjectDefinition } from './fabric/object-registry';
-export type { HistoryOptions, HistoryState } from './history/create-history';
+export type { HistoryOptions, HistoryState, TransactionOptions } from './history/create-history';
 export { bindKeyboardShortcuts } from './history/keyboard-shortcuts';
 export type { KeyboardShortcutOptions, UndoRedoTarget } from './history/keyboard-shortcuts';
 export type { DocumentStorage, SaveContext, SaveResult } from './storage/storage-contract';
@@ -76,3 +78,12 @@ export { CLIPBOARD_FORMAT, createClipboard } from './commands/clipboard';
 export type { Clipboard, ClipboardContent, ClipboardOptions, PasteOptions } from './commands/clipboard';
 export { bringForward, bringToFront, getLayers, moveToIndex, sendBackward, sendToBack } from './commands/layers';
 export type { LayerInfo, LayerOptions, LayerPin } from './commands/layers';
+export {
+  createTextCommands,
+  readStyleRuns,
+  replaceTextRange,
+  setTextRangeStyle,
+  shiftStyleRuns,
+  writeStyleRuns,
+} from './commands/text-edit';
+export type { EditableTextObject, InsertedStyle, StyleRun, TextCommands } from './commands/text-edit';

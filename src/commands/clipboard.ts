@@ -173,7 +173,13 @@ export function createClipboard(engine: DocumentEngine, options: ClipboardOption
       const distance = offset * pastes;
       const serialized = content.objects.map((object) => moved(withoutIds(object), distance));
       refuseUnknownTypes(serialized);
+      const startedIn = target.getDocumentInfo().session;
       const created = await createObjects(clone(serialized));
+      // Another document may have been opened while the copies were made.
+      if (target.getDocumentInfo().session !== startedIn) {
+        created.forEach((object) => object.dispose?.());
+        throw new DocumentEngineError('DOCUMENT_CHANGED', 'The paste was dropped because another document was opened while it ran');
+      }
       target.transaction(created.length === 1 ? 'Paste' : `Paste ${created.length} objects`, () => {
         target.canvas.add(...created);
       });

@@ -2,6 +2,9 @@ import type { FabricObject, StaticCanvas } from 'fabric';
 import type { SerializedFabricObject } from '../document/document-format';
 import { createObjects } from '../fabric/fabric-adapter';
 import { readObjectId } from '../fabric/object-ids';
+import { applyPage } from '../fabric/page-state';
+import type { PageState } from '../fabric/page-state';
+import { PAGE_KEY } from './snapshot';
 import type { StateChange } from './snapshot';
 
 interface CanvasWithSelection {
@@ -32,12 +35,27 @@ function arrangeObjects(current: readonly FabricObject[], change: StateChange, c
   );
 }
 
-export async function applyStateChange(canvas: StaticCanvas, change: StateChange): Promise<void> {
+/**
+ * Applies a change. `isStale` is checked after every wait: when it returns
+ * true the canvas now shows another document, so nothing is applied and the
+ * call returns false.
+ */
+export async function applyStateChange(canvas: StaticCanvas, change: StateChange, isStale: () => boolean = () => false): Promise<boolean> {
+  // The page goes first, so objects land on a canvas of the right size.
+  const page = change.objects.get(PAGE_KEY);
+  if (page) {
+    if (isStale()) return false;
+    await applyPage(canvas, JSON.parse(page) as PageState);
+  }
   const serializedObjects: SerializedFabricObject[] = [];
-  for (const json of change.objects.values()) {
-    if (json !== null) serializedObjects.push(JSON.parse(json) as SerializedFabricObject);
+  for (const [id, json] of change.objects) {
+    if (id !== PAGE_KEY && json !== null) serializedObjects.push(JSON.parse(json) as SerializedFabricObject);
   }
   const createdObjects = await createObjects(serializedObjects);
+  if (isStale()) {
+    createdObjects.forEach((object) => object.dispose?.());
+    return false;
+  }
   const createdById = new Map(createdObjects.map((object) => [readObjectId(object) ?? '', object]));
 
   (canvas as unknown as CanvasWithSelection).discardActiveObject?.();
@@ -60,4 +78,5 @@ export async function applyStateChange(canvas: StaticCanvas, change: StateChange
     canvas.renderOnAddRemove = renderOnAddRemove;
   }
   canvas.requestRenderAll();
+  return true;
 }

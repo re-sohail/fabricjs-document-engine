@@ -59,7 +59,9 @@ function isText(object: FabricObject): object is FabricObject & StraightText {
 
 export function hasStraightDecorations(object: FabricObject): boolean {
   if (!isText(object)) return false;
-  return DECORATIONS.some((type) => object[type] || object.styleHas(type));
+  // Raised or lowered letters too: Fabric 6 shifts them twice in SVG, once
+  // with `dy` and again with `baseline-shift`.
+  return DECORATIONS.some((type) => object[type] || object.styleHas(type)) || object.styleHas('deltaY');
 }
 
 function rect(x: number, y: number, width: number, height: number, color: unknown): string {
@@ -155,7 +157,8 @@ export function decoratedTextToSVG(object: FabricObject, reviver?: TSVGReviver):
     ._toSVG()
     .join('')
     .replace(/\stext-decoration="[^"]*"/g, '')
-    .replace(/text-decoration:[^;"]*;?\s*/g, '');
+    .replace(/text-decoration:[^;"]*;?\s*/g, '')
+    .replace(/baseline-shift:[^;"]*;?\s*/g, '');
   const markup = [
     decorationRects(text, 'underline'),
     inner,
