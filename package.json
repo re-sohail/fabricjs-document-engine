@@ -40,7 +40,8 @@
     "nextjs",
     "vue",
     "svelte",
-    "typescript"
+    "typescript",
+    "fabricjs document engine"
   ],
   "license": "MIT",
   "author": "Sohail Khan (https://me.jscrate.dev)",
