@@ -1,6 +1,6 @@
 {
   "name": "fabricjs-document-engine",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Fabric.js save and load, undo and redo, and autosave for an existing canvas: stable object ids, custom objects, copy and paste, SVG import, PNG, SVG and PDF export, and recovery.",
   "keywords": [
     "fabricjs",
@@ -105,6 +105,36 @@
       "require": {
         "types": "./dist/pdf.d.cts",
         "default": "./dist/pdf.cjs"
+      }
+    },
+    "./text": {
+      "import": {
+        "types": "./dist/text.d.ts",
+        "default": "./dist/text.js"
+      },
+      "require": {
+        "types": "./dist/text.d.cts",
+        "default": "./dist/text.cjs"
+      }
+    },
+    "./performance": {
+      "import": {
+        "types": "./dist/performance.d.ts",
+        "default": "./dist/performance.js"
+      },
+      "require": {
+        "types": "./dist/performance.d.cts",
+        "default": "./dist/performance.cjs"
+      }
+    },
+    "./filters": {
+      "import": {
+        "types": "./dist/filters.d.ts",
+        "default": "./dist/filters.js"
+      },
+      "require": {
+        "types": "./dist/filters.d.cts",
+        "default": "./dist/filters.cjs"
       }
     },
     "./schema/document-v1.json": "./schema/document-v1.schema.json",
