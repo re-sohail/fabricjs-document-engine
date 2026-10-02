@@ -125,6 +125,34 @@ The page, export or image is bigger than what browsers can draw (by default 16,3
 
 It should not. The engine uses white when the background is empty or transparent. If you still see black, you set `background` to a dark color.
 
+## A Textbox grows wider than I set it
+
+Fabric widens a Textbox to its longest word. Use `BoundedTextbox` from `fabricjs-document-engine/text`, which breaks long words between letters. Add `maxHeight` with `overflow` or `fit: 'shrink'` to keep the height too.
+
+## The cursor is in the wrong place in Arabic or with ligatures
+
+Fabric measures letters one by one but draws them joined. Use `ShapedIText` or `ShapedTextbox`, or `shaping: true` on a `BoundedTextbox`. Text with letter spacing or `justify` is drawn letter by letter and is already measured right.
+
+## Typing on Android puts letters or styles in the wrong place
+
+Call `attachMobileTextInput(canvas)` before editing starts. It reads each keyboard edit from the text, so autocorrect, suggestions and cursor swipes work.
+
+## Styles move to the wrong letters when I change text in code
+
+Setting `text` does not move styles. Use `createTextCommands(engine)` or `replaceTextRange`.
+
+## An imported SVG lost its groups
+
+Pass `preserveGroups: true` to `importSvg`. Group ids, classes and `data-*` attributes are on `svgId`, `svgClass` and `svgData`.
+
+## Applying a filter freezes the page
+
+Use `createFilterWorker()` from `fabricjs-document-engine/filters`. If `mode` is `'main-thread'`, the browser has no module workers or `OffscreenCanvas`, or the CommonJS build is in use; pass `createWorker` with your bundler's worker setup.
+
+## Dragging is slow with many objects
+
+Call `enableDirtyRegionRendering(canvas)` from `fabricjs-document-engine/performance`. If a custom object changes inside its own `_render` without changing any property, call `invalidate()` after the change.
+
 ## Saves fail with SAVE_CONFLICT
 
 Another tab or device saved the same document after this one loaded it. Either reload with `engine.load(id)`, or keep this version with `engine.save({ overwrite: true })`. If conflicts happen in a single tab, make sure your adapter returns the new revision, or that it stores `document.revision`.

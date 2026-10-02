@@ -199,6 +199,7 @@ const { objects, viewport, warnings } = await engine.importSvg(svgText, {
 | `left`, `top` | `0` | Where the viewport's top-left corner lands. |
 | `fit` | none | `{ width, height, mode? }` scales the viewport into a box. `mode` is `'contain'` (default), `'cover'` or `'fill'`. |
 | `crossOrigin` | `'anonymous'` | Passed to images in the SVG. |
+| `preserveGroups` | `false` | Rebuilds each `<g>` and `<a>` as a Fabric group (fabric.js #899). Groups keep their `id`, opacity and clip path. Objects lose ids they only inherited from a group. Every object and group gets `svgId`, `svgClass` and `svgData` (its `data-*` attributes), which are saved with the document. |
 | `signal` | none | Cancels the import with `LOAD_ABORTED`. |
 
 `SvgImportResult` is `{ objects, viewport: { width, height }, warnings: SvgImportWarning[] }`. A `SvgImportWarning` is `{ code, message }`, where `code` is a `SvgImportWarningCode`:
@@ -206,6 +207,8 @@ const { objects, viewport, warnings } = await engine.importSvg(svgText, {
 - `SVG_CONTENT_REMOVED`: scripts, event handlers, `foreignObject`, links to other files or CSS imports were removed.
 - `SVG_IMAGE_BLOCKED`: an image address was not allowed by `limits.isAllowedUrl`.
 - `SVG_OFFSCREEN_DROPPED`: `offscreen: 'drop'` left elements out.
+
+A `<use>` that points to nothing is left out. Fabric stops expanding every later `<use>` after such a link, so before this fix the rest were missing.
 
 The SVG is checked against `limits` like a document: too many elements or too deep nesting rejects with `UNSAFE_DOCUMENT`. Text that is not SVG rejects with `SVG_IMPORT_FAILED`.
 
@@ -287,6 +290,12 @@ A `RecoveryRecord` is `{ documentId, sessionId, active, savedAt, baseRevision, d
 | `sendBackward(engine, objects?, options?)` | Moves objects one step down. |
 | `moveToIndex(engine, objects, index, options?)` | Moves objects to an index counted from the bottom, as a block. |
 | `getLayers(engine)` | `LayerInfo[]` from top to bottom. |
+| `createTextCommands(engine)` | Text edits that keep letter styles in place. See [Text edits](#text-edits). |
+| `replaceTextRange(text, start, end, insert, style?)` | Replaces letters `start` to `end` and moves every style with its letters. No undo step on its own. |
+| `setTextRangeStyle(text, start, end, style)` | Merges a style into letters `start` to `end`. |
+| `shiftStyleRuns(runs, start, end, insertedLength, style?)` | Moves `StyleRun[]` for one edit. Pure, O(runs). |
+| `readStyleRuns(graphemes, styles)` | Fabric's per-line styles as `StyleRun[]`. |
+| `writeStyleRuns(graphemes, runs)` | `StyleRun[]` back to Fabric's per-line styles. |
 | `isDocumentEngineError(value)` | Type guard. |
 | `DocumentEngineError` | Error class with `code`, `issues`, `unknownTypes`, `missingAssets`, `missingFonts`, `problems`, `migrationFrom`, `retryable` and `cause`. |
 | `CURRENT_SCHEMA_VERSION` | `1` for every 1.x release. |
@@ -325,6 +334,20 @@ sendToBack(engine, undefined, keepBackground);
 ```
 
 A `LayerInfo` is `{ id, type, name, index, visible, locked }`. `name` is the object's `name` property, which the engine saves with the document. `locked` is true when the object cannot be selected.
+
+### Text edits
+
+Setting `text` on a Fabric text object leaves every letter style at its old position, so after an insert the bold word is no longer bold (fabric.js #6133). These commands move styles with their letters, keep the cursor and the hidden textarea in step while the user types, fire `changed` and `text:changed`, and record one undo step each.
+
+```ts
+const text = createTextCommands(engine);
+text.insertText(title, 0, 'New: ');
+text.replaceText(title, 5, 9, 'Big', { fontWeight: 'bold' });
+text.deleteText(title, 0, 5);
+text.setTextStyle(title, 0, 3, { fill: 'red' });
+```
+
+Positions count graphemes, as `selectionStart` does, so an emoji is one letter. `TextCommands` has `insertText(target, index, text, style?)`, `deleteText(target, start, end)`, `replaceText(target, start, end, text, style?)` and `setTextStyle(target, start, end, style)`. `target` is an `EditableTextObject`: an `IText`, a `Textbox` or a subclass. An `InsertedStyle` is a style object, `null` for no style, or `undefined` to take the style of the letter before. A `StyleRun` is `{ start, end, style }`.
 
 ### Rendering many documents
 
@@ -417,6 +440,145 @@ PDF export with [jsPDF](https://github.com/parallax/jsPDF) and [svg2pdf.js](http
 - `IMAGE_NOT_EMBEDDED`: an image could not be read, usually because of CORS, and is missing from the page.
 
 The page layout types are `NamedPageSize`, `PageLayout` and `PageLayoutOptions`.
+
+## `fabricjs-document-engine/text`
+
+Text classes for problems Fabric's text objects have. Register them with the engine so documents that use them save and load:
+
+```ts
+import { BoundedTextbox, VerticalText, attachMobileTextInput, textObjects } from 'fabricjs-document-engine/text';
+
+const engine = createDocumentEngine({ canvas, customObjects: textObjects });
+```
+
+| Export | Description |
+| --- | --- |
+| `BoundedTextbox` | A Textbox that keeps its width, with optional height limit, overflow and shrink-to-fit (fabric.js #2376). |
+| `ShapedIText`, `ShapedTextbox` | IText and Textbox whose cursor, selection and clicks follow joined letters and ligatures (fabric.js #4815). |
+| `VerticalText` | Editable vertical text for Chinese, Japanese and Korean (fabric.js #511). |
+| `attachMobileTextInput(canvas, options?)` | Correct typing with phone keyboards, autocorrect and IME (fabric.js #6588). Returns a `MobileTextInput`, `{ detach() }`. |
+| `textObjects` | `CustomObjectDefinition[]` for all the classes above. |
+| `registerTextObjects()` | Registers the classes with Fabric, for `loadFromJSON` without an engine. |
+| `findTextEdit(previous, next, cursor)` | The edited range between two grapheme lists, used by the mobile adapter. |
+| `shapeLine(text, lineIndex, measured)`, `shapeWord(text, word, lineIndex, offset, fallback)`, `drawsJoinedRuns(text)` | The shaped measuring, for your own text classes. `text` is an `AnyText`. |
+| `orientationOf(grapheme)`, `orientationOfCodePoint(codePoint)`, `Orientation` | UAX #50 vertical orientation: `Orientation.Upright`, `Rotated` or `UprightShifted`. |
+
+### `BoundedTextbox`
+
+Fabric widens a Textbox to its longest word. A `BoundedTextbox` breaks a word that is wider than the box between letters, so long links and text without spaces stay inside. The box is never narrower than its widest letter.
+
+`BoundedTextboxProps`:
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `breakWords` | `'anywhere'` | A `BreakWords`. `never` acts like a Textbox. |
+| `maxHeight` | none | The tallest the box may be. |
+| `overflow` | `'visible'` | A `TextOverflow`: `visible`, `clip` (cut at `maxHeight`), or `ellipsis` (hide the lines past `maxHeight` and end the last one with "…"). The text itself is not changed. |
+| `fit` | `'none'` | A `TextFit`. `shrink` makes the text smaller, in half points, until it fits `maxHeight`. |
+| `minFontSize` | `6` | The smallest size `shrink` goes to. |
+| `shaping` | `false` | Measure as `ShapedTextbox` does. |
+
+With `fit: 'shrink'`, `fontSize` reads the size drawn and `getBaseFontSize()` the size you set. The document saves the size you set. `fitScale` is the share used.
+
+### `ShapedIText` and `ShapedTextbox`
+
+Fabric measures letters one by one and draws runs of letters together, where the font joins them. In Arabic at 40px, the cursor lands up to two letters away from where it should be. These classes measure each position from the text as the browser shapes it, by words, with a cache. Text with letter spacing, `justify` or a path is drawn letter by letter by Fabric and is measured as Fabric does.
+
+### `VerticalText`
+
+Lines become columns, read top to bottom and placed right to left. Chinese, Japanese and Korean characters stand upright and Latin text turns 90°, following Unicode's vertical orientation table (UAX #50). The cursor is a horizontal bar. ↓ and ↑ move along a column, ← and → move to the next and previous column. IME input works as in any IText. SVG and PDF export draw each upright character and each turned run with its own position, without `writing-mode`.
+
+`VerticalTextProps`:
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `textOrientation` | `'mixed'` | A `TextOrientation`. `upright` stands every character up. |
+| `combineUpright` | `'none'` | A `CombineUpright`. `digits2` sets one or two digits side by side in one square (tate-chū-yoko). |
+
+`textAlign` places columns along their length: `left` at the top, `center`, `right` at the bottom.
+
+### `attachMobileTextInput`
+
+Android keyboards send keyCode 229 for every key and change the text away from the cursor: autocorrect replaces a word before it, and a swipe on the space bar moves it. Fabric works out each edit from its own cursor, so text and styles land in the wrong place. The adapter reads each edit from the text itself and applies it with `replaceTextRange`. It also follows cursor moves made by the keyboard, focuses the textarea inside the tap so the keyboard opens, uses a 16px font so iOS does not zoom, and keeps the textarea at the cursor when the keyboard resizes the page. Attach it before editing starts.
+
+`MobileTextInputOptions`:
+
+| Option | Default |
+| --- | --- |
+| `inputMode` | `'text'` |
+| `enterKeyHint` | `'enter'` |
+| `autocapitalize` | `'sentences'` |
+| `autocorrect` | `true` |
+| `spellcheck` | `false` |
+
+## `fabricjs-document-engine/performance`
+
+Faster rendering for canvases with many objects (fabric.js #9847).
+
+| Export | Description |
+| --- | --- |
+| `enableDirtyRegionRendering(canvas, options?)` | Redraws only what changed. Returns a `DirtyRegionRenderer`. |
+| `createPerformanceMonitor(canvas, options?)` | Frame times and objects drawn. Returns a `PerformanceMonitor`. |
+| `batchCanvasUpdates(canvas, work)` | Runs many adds and changes with one render at the end. Nests, and works with async work. |
+| `createSpatialIndex(options?)` | The grid index the renderer uses. Returns a `SpatialIndex` with `set`, `delete`, `has`, `query`, `clear` and `size`. `SpatialIndexOptions` is `{ cellSize?, maxCellsPerItem? }`. A `Rect` is `{ left, top, width, height }`. |
+
+### `enableDirtyRegionRendering`
+
+```ts
+const renderer = enableDirtyRegionRendering(canvas);
+```
+
+Each frame, one pass compares a fingerprint of every object with the last frame: its transform, size, stack position, shadow, stroke, `dirty` flag and those of its children. So changes made with `set()` and no event are seen. Each changed object marks its old and new bounds, grown for shadows, stroke joins, text overhang and anti-aliasing, and the selection's controls mark their area. A grid index finds the objects that touch the marked areas, and Fabric's own `renderCanvas` draws only those, once, clipped to the areas. `before:render` and `after:render` still fire once per frame.
+
+The frame is drawn in full when the view, size, background, overlay or canvas clip path change, or when the marked area is larger than `fullRedrawRatio`. A frame where nothing changed draws nothing. Exports and `toCanvasElement` always draw in full.
+
+`DirtyRegionOptions` is `{ fullRedrawRatio?: 0.4, maxRegions?: 4, cellSize?: 256 }`. `DirtyRegionRenderer` has `invalidate()` (draw the next frame in full, for changes made inside a custom `_render`), `stats()` and `disable()`. `DirtyRegionStats` is `{ frames, fullFrames, skippedFrames, lastObjectsDrawn, lastAreaRatio, lastRegions }`.
+
+Chromium and Firefox smooth the edges of shapes slightly differently when a clip is active, so an edge pixel can differ by a few shades from a full redraw. Shapes, colors and positions are the same.
+
+### `createPerformanceMonitor`
+
+`PerformanceMonitorOptions` is `{ samples?: 120 }`. `PerformanceMonitor` has `stats()`, `reset()` and `stop()`. `FrameStats` is `{ frames, averageMs, p50Ms, p95Ms, worstMs, lastObjectsDrawn }`.
+
+## `fabricjs-document-engine/filters`
+
+Image filters off the main thread (fabric.js #9532). `FabricImage.applyFilters` runs every filter over every pixel before the page can paint again.
+
+```ts
+const filterWorker = createFilterWorker({ engine });
+await filterWorker.apply(image, [new filters.Blur({ blur: 0.2 }), new filters.Brightness({ brightness: 0.1 })], {
+  onProgress: (done) => setProgress(done),
+  signal,
+});
+```
+
+| Export | Description |
+| --- | --- |
+| `createFilterWorker(options?)` | Returns a `FilterWorker`. |
+| `runFilterPipeline(filters, state, options?)` | Runs filters on `ImageData` in steps. `PipelineState` matches Fabric's 2D pipeline state. `PipelineOptions` is `{ bandRows?, onProgress?, isCancelled?, pause? }`. A `PipelineFilter` is any Fabric filter. |
+| `canRunInWorker(filters)` | True when every filter, inside `Composed` ones too, can run in a worker. |
+| `flattenFilters(filters)` | `Composed` filters replaced by their sub-filters. |
+| `PIXEL_FILTERS`, `WORKER_FILTERS` | The filter types run in bands of rows, and all the types a worker runs. |
+
+`FilterWorker`:
+
+| Member | Description |
+| --- | --- |
+| `apply(image, filters?, options?)` | Applies filters, by default the image's own. Resolves `true` when the image was updated and `false` when a newer run for the same image replaced it. Rejects with the signal's reason when aborted. The image only changes when the result is ready. `ApplyFilterOptions` is `{ signal?, onProgress? }`. |
+| `mode` | `'worker'` or `'main-thread'`. |
+| `terminate()` | Stops the workers. Runs still going resolve `false`. |
+
+`FilterWorkerOptions`:
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `createWorker` | the shipped worker | Makes a worker. Use it when your bundler needs its own worker setup. |
+| `worker` | `true` | `false` runs the steps on the main thread with a pause after each. |
+| `poolSize` | `1` | Workers to run at once. |
+| `bandRows` | `64` | Rows per step for pixel filters. |
+| `engine` | none | Records each finished run as one undo step and drops runs that finish after another document opened. |
+
+The picture and the result are transferred as `ImageBitmap`s, not copied. Pixel filters run together over bands of rows, with progress and a cancel check after each band. Blur, Convolute and Pixelate run over the whole picture as one step. The results match Fabric's 2D filter backend. Filters a worker cannot run, such as BlendImage, Resize or your own, use Fabric's `applyFilters`. Without `Worker` and `OffscreenCanvas` (Safari before 16.4), or from the CommonJS build, the steps run on the main thread. An `ImageFilter` is any Fabric filter.
 
 ## Error codes
 

@@ -14,6 +14,8 @@ These results come from version 0.8.0. Every release runs the same suite before 
 - Plain Fabric JSON from Fabric 5 opens through the migration step. Fabric 6 and 7 still accept Fabric 5's legacy type names.
 - **WebKit note.** WebKit cannot store `Blob` values in IndexedDB, so recovery copies keep image data as bytes and turn it back into a `Blob` when read.
 - React 18 and 19 are supported through `fabricjs-document-engine/react`. The core never imports React.
+- `fabricjs-document-engine/filters` runs filters in a module worker with `OffscreenCanvas` (Chrome 80, Firefox 114, Safari 16.4 and later). Elsewhere, and from the CommonJS build, filters run in steps on the main thread.
+- `ShapedIText` and `ShapedTextbox` use the browser's own shaping through `measureText`, so results follow the fonts installed.
 
 ## Performance targets
 
@@ -31,6 +33,17 @@ These are measured with 5,000 objects: 60% rectangles, 20% circles, 10% text box
 Export time is almost all Fabric's own rendering plus the browser's image encoder, shown as "Fabric alone" below. The engine adds its preflight check on top.
 
 A regression test runs 2,000 objects in every browser project with generous budgets, so large slowdowns fail the build.
+
+## Dirty-region rendering
+
+The median time of one frame while dragging one rectangle on a 1,200 × 800 canvas, measured in the test browsers (headless, software drawing), version 1.3.0:
+
+| Objects | Chromium: Fabric / dirty regions | Firefox: Fabric / dirty regions | WebKit: Fabric / dirty regions |
+| --- | --- | --- | --- |
+| 1,000 | 178 ms / 0.4 ms | 151 ms / 1 ms | 1 ms / 0 ms |
+| 5,000 | 987 ms / 1.7 ms | 814 ms / 2 ms | 10 ms / 3 ms |
+
+With dirty regions, about 25 objects are drawn per frame instead of 5,000. The remaining time is the pass that compares every object with the last frame.
 
 ## Measurements
 
