@@ -1,0 +1,116 @@
+export const Orientation = {
+  Upright: 0,
+  Rotated: 1,
+  UprightShifted: 2,
+} as const;
+
+export type Orientation = (typeof Orientation)[keyof typeof Orientation];
+
+const U = Orientation.Upright;
+const R = Orientation.Rotated;
+const T = Orientation.UprightShifted;
+
+const RANGES: ReadonlyArray<readonly [number, Orientation]> = [
+  [0x0000, R],
+  [0x00a7, U], [0x00a8, R],
+  [0x00a9, U], [0x00aa, R],
+  [0x00ae, U], [0x00af, R],
+  [0x00b1, U], [0x00b2, R],
+  [0x00bc, U], [0x00bf, R],
+  [0x00d7, U], [0x00d8, R],
+  [0x00f7, U], [0x00f8, R],
+  [0x02ea, U], [0x02ec, R],
+  [0x1100, U], [0x1200, R],
+  [0x1401, U], [0x1680, R],
+  [0x18b0, U], [0x1900, R],
+  [0x2016, U], [0x2017, R],
+  [0x2020, U], [0x2022, R],
+  [0x2030, U], [0x2032, R],
+  [0x203b, U], [0x203d, R],
+  [0x2042, U], [0x2043, R],
+  [0x2047, U], [0x204a, R],
+  [0x2051, U], [0x2052, R],
+  [0x20dd, U], [0x20e1, R],
+  [0x2100, U], [0x2102, R],
+  [0x2103, U], [0x210a, R],
+  [0x210f, U], [0x2110, R],
+  [0x2113, U], [0x2115, R],
+  [0x2116, U], [0x2118, R],
+  [0x211e, U], [0x2124, R],
+  [0x2125, U], [0x2126, R],
+  [0x2127, U], [0x2128, R],
+  [0x2129, U], [0x212a, R],
+  [0x212e, U], [0x212f, R],
+  [0x2135, U], [0x2140, R],
+  [0x2145, U], [0x214b, R],
+  [0x214c, U], [0x214e, R],
+  [0x214f, U], [0x218a, R],
+  [0x218c, U], [0x2190, R],
+  [0x221e, U], [0x221f, R],
+  [0x2234, U], [0x2236, R],
+  [0x2300, U], [0x2308, R],
+  [0x230c, U], [0x2320, R],
+  [0x2324, U], [0x2329, R],
+  [0x232b, U], [0x232c, R],
+  [0x237d, U], [0x239b, R],
+  [0x23be, U], [0x23ce, R],
+  [0x23cf, U], [0x23d0, R],
+  [0x23d1, U], [0x23dc, R],
+  [0x23e2, U], [0x2423, R],
+  [0x2424, U], [0x2500, R],
+  [0x25a0, U], [0x261a, R],
+  [0x2620, U], [0x2768, R],
+  [0x2776, U], [0x2794, R],
+  [0x2b12, U], [0x2b30, R],
+  [0x2b50, U], [0x2b5a, R],
+  [0x2bb8, U], [0x2c00, R],
+  [0x2e80, U],
+  [0x3001, T], [0x3003, U],
+  [0x3008, R], [0x3012, U],
+  [0x3014, R], [0x3020, U],
+  [0x3030, R], [0x3031, U],
+  [0x30a0, R], [0x30a1, U],
+  [0x30fc, R], [0x30fd, U],
+  [0xa4d0, R],
+  [0xa960, U], [0xa980, R],
+  [0xac00, U], [0xd800, R],
+  [0xe000, U], [0xfb00, R],
+  [0xfe10, U], [0xfe20, R],
+  [0xfe30, U],
+  [0xfe50, T], [0xfe53, U],
+  [0xfe58, R], [0xfe5f, U],
+  [0xfe63, R], [0xfe64, U],
+  [0xfe67, R], [0xfe68, U],
+  [0xfe70, R],
+  [0xff01, U],
+  [0xff08, R], [0xff0a, U],
+  [0xff0c, T], [0xff0d, R],
+  [0xff0e, T], [0xff0f, U],
+  [0xff1a, R], [0xff1f, U],
+  [0xff3b, R], [0xff3c, U],
+  [0xff3d, R], [0xff3e, U],
+  [0xff3f, R], [0xff40, U],
+  [0xff5b, R], [0xff61, R],
+  [0xffe0, U], [0xffe3, R],
+  [0xffe4, U], [0xffe8, R],
+  [0x1f000, U], [0x1fb00, R],
+  [0x20000, U], [0x3fffe, R],
+];
+
+const starts = Uint32Array.from(RANGES, ([start]) => start);
+const classes = Uint8Array.from(RANGES, ([, orientation]) => orientation);
+
+export function orientationOfCodePoint(codePoint: number): Orientation {
+  let low = 0;
+  let high = starts.length - 1;
+  while (low < high) {
+    const middle = (low + high + 1) >> 1;
+    if (starts[middle]! <= codePoint) low = middle;
+    else high = middle - 1;
+  }
+  return classes[low] as Orientation;
+}
+
+export function orientationOf(grapheme: string): Orientation {
+  return grapheme === '' ? Orientation.Rotated : orientationOfCodePoint(grapheme.codePointAt(0)!);
+}

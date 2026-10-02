@@ -78,3 +78,12 @@ export { CLIPBOARD_FORMAT, createClipboard } from './commands/clipboard';
 export type { Clipboard, ClipboardContent, ClipboardOptions, PasteOptions } from './commands/clipboard';
 export { bringForward, bringToFront, getLayers, moveToIndex, sendBackward, sendToBack } from './commands/layers';
 export type { LayerInfo, LayerOptions, LayerPin } from './commands/layers';
+export {
+  createTextCommands,
+  readStyleRuns,
+  replaceTextRange,
+  setTextRangeStyle,
+  shiftStyleRuns,
+  writeStyleRuns,
+} from './commands/text-edit';
+export type { EditableTextObject, InsertedStyle, StyleRun, TextCommands } from './commands/text-edit';

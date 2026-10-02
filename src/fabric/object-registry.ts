@@ -14,7 +14,7 @@ export interface ObjectRegistry {
 
 export function createObjectRegistry(initialDefinitions: readonly CustomObjectDefinition[] = []): ObjectRegistry {
   // `name` is the label a layers panel shows. Fabric does not save it on its own.
-  const extraProperties = new Set<string>(['id', 'name']);
+  const extraProperties = new Set<string>(['id', 'name', 'svgId', 'svgClass', 'svgData']);
 
   function register(definition: CustomObjectDefinition): void {
     const { fabricClass } = definition;
