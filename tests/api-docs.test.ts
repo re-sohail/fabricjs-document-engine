@@ -22,10 +22,13 @@ describe('API reference', () => {
       import('../src/recovery'),
       import('../src/react'),
       import('../src/pdf'),
+      import('../src/text'),
+      import('../src/performance'),
+      import('../src/filters'),
     ]);
     const names = entries.flatMap((entry) => Object.keys(entry));
     expect(undocumented(names)).toEqual([]);
-  }, 30_000);
+  }, 120_000);
 
   it('documents every engine method', () => {
     const members = [...blockOf(engineSource, 'export interface DocumentEngine {').matchAll(/^ {2}(?:readonly )?([a-zA-Z]+)[(<:]/gm)].map(
