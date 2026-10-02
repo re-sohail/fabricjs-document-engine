@@ -74,6 +74,8 @@ That is the whole setup for a first test. localStorage is fine here; in a real a
 - **Versions and migration.** Keep named versions, restore any of them as a new revision, and open plain Fabric JSON or documents saved by older versions of this package.
 - **Large documents.** Objects are created in chunks so the page stays responsive. Loads report progress and can be cancelled with an `AbortSignal`, and a cancelled load leaves the canvas as it was.
 - **Copy, paste and layers.** A clipboard that keeps group transforms and custom properties and gives every pasted object a new id, plus bring-to-front and send-to-back commands that keep a pinned background in place. Each is one undo step.
+- **Text that behaves.** A Textbox that keeps its width and can clip, add "…" or shrink to fit; cursor positions that match Arabic and ligatures; editable vertical Chinese, Japanese and Korean text; correct typing with Android and iOS keyboards; and text edits in code that keep each letter's style.
+- **Fast with many objects.** Dirty-region rendering redraws only what changed, and image filters run in a Web Worker with progress and cancel.
 - **Undo and redo.** One user action is one undo step. Transactions group several code changes into one labelled step, and ids survive undo and redo.
 - **React ready, framework free.** Hooks for React, and a small state store for any other framework.
 - **Hardened.** Imported documents and SVG files are cleaned and size-limited, undo history has a memory budget, and every feature is tested on Fabric 6 and 7 in Chromium, Firefox and WebKit. Exports are checked pixel by pixel against the canvas.
@@ -428,6 +430,7 @@ const { objects, viewport, warnings } = await engine.importSvg(svgText, {
 - The result is one group with a fixed layout the size of the viewport, or separate objects with `as: 'objects'`. Either way it is one undo step, and every object gets an id.
 - Scripts, event handlers, `foreignObject`, links to other files and image addresses that `limits.isAllowedUrl` refuses are removed, and `warnings` says what was removed.
 - Size limits apply as for documents, so a huge or deeply nested SVG is refused with `UNSAFE_DOCUMENT`.
+- `preserveGroups: true` keeps the SVG's `<g>` groups as Fabric groups, with their ids, opacity, clip paths, classes and `data-*` attributes (Fabric flattens them).
 
 ## Version history
 
@@ -592,6 +595,34 @@ getLayers(engine); // [{ id, type, name, index, visible, locked }], top first
 ```
 
 The engine saves each object's `name`, so a layers panel keeps its labels. In React, `useLayers(engine)` from `fabricjs-document-engine/react` returns the same list and updates on every change.
+
+## Text, rendering speed and filters
+
+These fix long-standing Fabric.js issues. Each was reproduced on Fabric 6 and 7 first, and each fix is tested in Chromium, Firefox and WebKit.
+
+```ts
+import { BoundedTextbox, VerticalText, ShapedIText, attachMobileTextInput, textObjects } from 'fabricjs-document-engine/text';
+import { enableDirtyRegionRendering } from 'fabricjs-document-engine/performance';
+import { createFilterWorker } from 'fabricjs-document-engine/filters';
+import { createTextCommands } from 'fabricjs-document-engine';
+
+const engine = createDocumentEngine({ canvas, customObjects: textObjects });
+canvas.add(new BoundedTextbox(longText, { width: 240, maxHeight: 120, overflow: 'ellipsis' }));
+canvas.add(new VerticalText('縦書きのテキスト', { fontSize: 32 }));
+canvas.add(new ShapedIText('مرحبا بالعالم', { direction: 'rtl' }));
+attachMobileTextInput(canvas);
+createTextCommands(engine).insertText(title, 0, 'New: ');
+enableDirtyRegionRendering(canvas);
+await createFilterWorker({ engine }).apply(image, [new filters.Blur({ blur: 0.2 })], { onProgress });
+```
+
+- **`BoundedTextbox` (#2376).** Fabric widens a Textbox to its longest word. This one breaks such a word between letters, as CSS `overflow-wrap: anywhere` does. With `maxHeight`, extra lines are clipped or end in "…", or `fit: 'shrink'` makes the font smaller until the text fits. The saved font size does not change.
+- **`ShapedIText` and `ShapedTextbox` (#4815).** Fabric measures each letter alone but draws joined letters, so in Arabic the cursor can land two letters away. These measure from the text as the browser shapes it.
+- **`VerticalText` (#511).** Columns from right to left, upright CJK characters, turned Latin words (Unicode UAX #50), and two-digit numbers side by side. Arrow keys, selection, IME, SVG and PDF all work.
+- **`attachMobileTextInput` (#6588).** Reads each edit from the text itself, so Android autocorrect, suggestions and cursor swipes put letters and styles in the right place. It also opens the keyboard on tap and stops iOS from zooming.
+- **`createTextCommands` (#6133).** Insert, delete, replace and restyle text from code with styles that stay on their letters, one undo step each.
+- **`enableDirtyRegionRendering` (#9847).** Moving one of 5,000 shapes draws about 25 of them instead of all 5,000: under 2 ms per frame in place of nearly a second in headless Chromium.
+- **`createFilterWorker` (#9532).** Fabric's filters run in a worker on transferred bitmaps, with the same pixels as Fabric, progress, cancel, and only the newest run applied while a slider moves.
 
 ## Edits that are never lost
 
